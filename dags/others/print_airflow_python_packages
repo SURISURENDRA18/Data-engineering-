@@ -28,7 +28,7 @@ default_args = {
 }
 
 with DAG(
-    dag_id="print_airflow_python_packages1",
+    dag_id="print_airflow_python_packages",
     default_args=default_args,
     schedule=None,
     catchup=False,
