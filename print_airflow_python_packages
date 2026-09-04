@@ -1,0 +1,43 @@
+from airflow import DAG
+from airflow.operators.python import PythonOperator
+from datetime import datetime
+import sys
+import pkg_resources
+
+
+def print_python_packages():
+    print("===== Python Environment Info =====")
+    print(f"Python Executable: {sys.executable}")
+    print(f"Python Version: {sys.version}")
+    print("\n===== Installed Python Packages =====")
+
+    packages = sorted(
+        [(d.project_name, d.version) for d in pkg_resources.working_set]
+    )
+
+    for name, version in packages:
+        print(f"{name}=={version}")
+
+    print("\nTotal Packages:", len(packages))
+
+
+default_args = {
+    "owner": "airflow",
+    "start_date": datetime(2025, 1, 1),
+    "retries": 0,
+}
+
+with DAG(
+    dag_id="print_airflow_python_packages",
+    default_args=default_args,
+    schedule=None,
+    catchup=False,
+    tags=["debug", "env-check"],
+) as dag:
+
+    print_packages_task = PythonOperator(
+        task_id="print_installed_python_packages",
+        python_callable=print_python_packages,
+    )
+
+    print_packages_task
