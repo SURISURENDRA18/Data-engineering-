@@ -36,25 +36,38 @@ def minio_doris_connectivity_test():
         print(f"Read {len(rows)} row(s) from minio://{BUCKET}/{OBJECT_KEY}")
         return rows
 
-    @task
+       @task
     def load_to_doris(rows: list[dict]):
+        import pymysql
         if not rows:
             print("No rows to load — check the MinIO read step")
             return
-        hook = MySqlHook(mysql_conn_id="doris_conn")
-        hook.run(f"""
-            CREATE TABLE IF NOT EXISTS {TARGET_TABLE} (
-                msisdn VARCHAR(15),
-                plan_code VARCHAR(20),
-                signup_date DATE
-            ) UNIQUE KEY(msisdn) DISTRIBUTED BY HASH(msisdn) BUCKETS 1
-            PROPERTIES ("replication_num" = "1")
-        """)
-        for row in rows:
-            hook.run(
-                f"INSERT INTO {TARGET_TABLE} (msisdn, plan_code, signup_date) VALUES (%s, %s, %s)",
-                parameters=(row["msisdn"], row["plan_code"], row["signup_date"]),
-            )
+        conn_info = BaseHook.get_connection("doris_conn")
+        conn = pymysql.connect(
+            host=conn_info.host,
+            port=conn_info.port,
+            user=conn_info.login,
+            password=conn_info.password or "",
+            database="database_ganesh",
+            autocommit=True,
+        )
+        try:
+            with conn.cursor() as cur:
+                cur.execute(f"""
+                    CREATE TABLE IF NOT EXISTS {TARGET_TABLE} (
+                        msisdn VARCHAR(15),
+                        plan_code VARCHAR(20),
+                        signup_date DATE
+                    ) UNIQUE KEY(msisdn) DISTRIBUTED BY HASH(msisdn) BUCKETS 1
+                    PROPERTIES ("replication_num" = "1")
+                """)
+                for row in rows:
+                    cur.execute(
+                        f"INSERT INTO {TARGET_TABLE} (msisdn, plan_code, signup_date) VALUES (%s, %s, %s)",
+                        (row["msisdn"], row["plan_code"], row["signup_date"]),
+                    )
+        finally:
+            conn.close()
         print(f"Loaded {len(rows)} row(s) into {TARGET_TABLE}")
 
     load_to_doris(read_from_minio())
