@@ -5,7 +5,6 @@ import io
 from airflow.decorators import dag, task
 from airflow.hooks.base import BaseHook
 from minio import Minio
-from airflow.providers.mysql.hooks.mysql import MySqlHook
 
 BUCKET = "test"
 OBJECT_KEY = "sample.csv"
@@ -36,7 +35,7 @@ def minio_doris_connectivity_test():
         print(f"Read {len(rows)} row(s) from minio://{BUCKET}/{OBJECT_KEY}")
         return rows
 
-       @task
+    @task
     def load_to_doris(rows: list[dict]):
         import pymysql
         if not rows:
