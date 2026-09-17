@@ -13,7 +13,7 @@ DEST_SCHEMA = "santhosh_retail_analytics"
 
 
 def fetch_minio_client():
-    conn = BaseHook.get_connection("minio_conn")
+    conn = BaseHook.get_connection("minio_default")
     return Minio(
         f"{conn.host}:{conn.port}",
         access_key=conn.login,
@@ -23,7 +23,7 @@ def fetch_minio_client():
 
 
 def fetch_doris_connection():
-    conn = BaseHook.get_connection("doris_conn")
+    conn = BaseHook.get_connection("doris_default")
     return pymysql.connect(
         host=conn.host,
         port=conn.port,
@@ -32,7 +32,6 @@ def fetch_doris_connection():
         database=DEST_SCHEMA,
         autocommit=True,
     )
-
 
 @dag(
     dag_id="santhosh_task1_etl",
