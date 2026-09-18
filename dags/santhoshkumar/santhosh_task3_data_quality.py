@@ -27,7 +27,7 @@ def get_doris_conn():
 
 
 def get_minio_client():
-    conn_info = BaseHook.get_connection("santhosh_minio")
+    conn_info = BaseHook.get_connection("minio_default")
     endpoint = f"{conn_info.host}:{conn_info.port}".replace("http://", "").replace("https://", "")
     return Minio(
         endpoint=endpoint,
