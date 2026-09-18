@@ -39,14 +39,26 @@ def task2_warehouse_load():
 
     @task
     def load_dim_customer() -> None:
+        # customer_sk must be omitted from the INSERT for brand-new customers
+        # so Doris's AUTO_INCREMENT assigns it; supplying a literal (e.g. 0)
+        # does not trigger auto-assignment and causes every new row to
+        # collide on the same customer_sk = 0 (UNIQUE KEY), collapsing them
+        # into a single row. So existing vs. new customers are two statements.
         conn = _doris_conn()
         try:
             with conn.cursor() as cur:
                 cur.execute("""
                     INSERT INTO dim_customer (customer_sk, customer_id, customer_name, city, email, created_date)
-                    SELECT COALESCE(d.customer_sk, 0), c.customer_id, c.customer_name, c.city, c.email, c.created_date
+                    SELECT d.customer_sk, c.customer_id, c.customer_name, c.city, c.email, c.created_date
+                    FROM customers c
+                    JOIN dim_customer d ON d.customer_id = c.customer_id
+                """)
+                cur.execute("""
+                    INSERT INTO dim_customer (customer_id, customer_name, city, email, created_date)
+                    SELECT c.customer_id, c.customer_name, c.city, c.email, c.created_date
                     FROM customers c
                     LEFT JOIN dim_customer d ON d.customer_id = c.customer_id
+                    WHERE d.customer_id IS NULL
                 """)
         finally:
             conn.close()
