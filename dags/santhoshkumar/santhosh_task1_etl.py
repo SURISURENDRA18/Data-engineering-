@@ -1,5 +1,6 @@
 from datetime import datetime
 import csv
+import io
 from airflow.decorators import dag, task
 from airflow.hooks.base import BaseHook
 from minio import Minio
@@ -33,6 +34,7 @@ def fetch_doris_connection():
         autocommit=True,
     )
 
+
 @dag(
     dag_id="santhosh_task1_etl",
     start_date=datetime(2026, 1, 1),
@@ -54,8 +56,9 @@ def task1_etl_pipeline():
     def load_customers_staging():
         client = fetch_minio_client()
         response = client.get_object(BUCKET_NAME, CUSTOMERS_FILE)
-        lines = [line.decode("utf-8") for line in response.iter_lines()]
-        reader = csv.DictReader(lines)
+        # Read the file text and wrap it as a stream for csv.DictReader
+        content = response.read().decode("utf-8")
+        reader = csv.DictReader(io.StringIO(content))
 
         conn = fetch_doris_connection()
         cursor = conn.cursor()
@@ -84,8 +87,9 @@ def task1_etl_pipeline():
     def load_orders_staging():
         client = fetch_minio_client()
         response = client.get_object(BUCKET_NAME, ORDERS_FILE)
-        lines = [line.decode("utf-8") for line in response.iter_lines()]
-        reader = csv.DictReader(lines)
+        # Read the file text and wrap it as a stream for csv.DictReader
+        content = response.read().decode("utf-8")
+        reader = csv.DictReader(io.StringIO(content))
 
         conn = fetch_doris_connection()
         cursor = conn.cursor()
