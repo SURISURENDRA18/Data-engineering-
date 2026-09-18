@@ -24,12 +24,12 @@ def get_minio_client():
 
 
 def get_doris_connection():
-    conn = BaseHook.get_connection("doris_default")
+    doris_conn = BaseHook.get_connection("doris_default")
     return pymysql.connect(
-        host=conn.host,
-        port=int(conn.port),
-        user=conn.login,
-        password=conn.password or "",
+        host=doris_conn.host,
+        port=int(doris_conn.port),
+        user=doris_conn.login,
+        password=doris_conn.password or "",
         database=DEST_SCHEMA,
         autocommit=True,
     )
