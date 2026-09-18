@@ -24,8 +24,7 @@ def get_minio_client():
 
 
 def get_doris_connection():
-    doris_conn = BaseHook.get_connection("doris_default")
-    # Connect without database parameter to avoid Doris handshake drops
+    doris_conn = BaseHook.get_connection("santhosh_doris")
     conn = pymysql.connect(
         host=doris_conn.host,
         port=int(doris_conn.port),
@@ -36,7 +35,6 @@ def get_doris_connection():
     with conn.cursor() as cur:
         cur.execute(f"USE `{DEST_SCHEMA}`;")
     return conn
-
 
 @dag(
     dag_id="santhosh_task1_etl",
