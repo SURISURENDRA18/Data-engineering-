@@ -25,14 +25,17 @@ def get_minio_client():
 
 def get_doris_connection():
     doris_conn = BaseHook.get_connection("doris_default")
-    return pymysql.connect(
+    # Connect without database parameter to avoid Doris handshake drops
+    conn = pymysql.connect(
         host=doris_conn.host,
         port=int(doris_conn.port),
         user=doris_conn.login,
         password=doris_conn.password or "",
-        database=DEST_SCHEMA,
         autocommit=True,
     )
+    with conn.cursor() as cur:
+        cur.execute(f"USE `{DEST_SCHEMA}`;")
+    return conn
 
 
 @dag(
@@ -147,7 +150,6 @@ def task1_etl_pipeline():
         finally:
             conn.close()
 
-    # Flow
     chk = check_input_files()
     c_stg = load_customers_staging()
     o_stg = load_orders_staging()
