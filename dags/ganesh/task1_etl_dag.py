@@ -114,15 +114,30 @@ def task1_etl():
                            STR_TO_DATE(created_date, '%Y-%m-%d')
                     FROM stg_customers
                     WHERE customer_id IS NOT NULL
+                      AND customer_id NOT IN (
+                          SELECT customer_id FROM stg_customers
+                          GROUP BY customer_id HAVING COUNT(*) > 1
+                      )
+                      AND (created_date IS NULL OR STR_TO_DATE(created_date, '%Y-%m-%d') IS NOT NULL)
                 """)
                 cur.execute("""
                     INSERT INTO orders (order_id, customer_id, order_date, quantity, unit_price, total_amount)
-                    SELECT CAST(order_id AS SIGNED), customer_id,
-                           STR_TO_DATE(order_date, '%Y-%m-%d'),
-                           quantity, unit_price,
-                           CAST(quantity AS DECIMAL(12,2)) * unit_price
-                    FROM stg_orders
-                    WHERE order_id IS NOT NULL AND order_id REGEXP '^[0-9]+$'
+                    SELECT CAST(o.order_id AS SIGNED), o.customer_id,
+                           STR_TO_DATE(o.order_date, '%Y-%m-%d'),
+                           o.quantity, o.unit_price,
+                           CAST(o.quantity AS DECIMAL(12,2)) * o.unit_price
+                    FROM stg_orders o
+                    WHERE o.order_id IS NOT NULL AND o.order_id REGEXP '^[0-9]+$'
+                      AND o.order_id NOT IN (
+                          SELECT order_id FROM stg_orders
+                          GROUP BY order_id HAVING COUNT(*) > 1
+                      )
+                      AND o.quantity IS NOT NULL AND o.quantity > 0
+                      AND o.unit_price IS NOT NULL AND o.unit_price >= 0
+                      AND (o.order_date IS NULL OR STR_TO_DATE(o.order_date, '%Y-%m-%d') IS NOT NULL)
+                      AND (o.customer_id IS NULL OR EXISTS (
+                          SELECT 1 FROM customers c WHERE c.customer_id = o.customer_id
+                      ))
                 """)
             print("Transform + load into curated customers/orders complete.")
         finally:
