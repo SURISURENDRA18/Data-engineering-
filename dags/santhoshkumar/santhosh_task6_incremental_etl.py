@@ -6,7 +6,6 @@ from airflow.decorators import dag, task
 from airflow.hooks.base import BaseHook
 from minio import Minio
 
-# Specific configurations for Santhosh environment
 BUCKET = "test"
 PREFIX = "santhosh_raw_data/"
 SCHEMA = "santhosh_retail_analytics"
@@ -14,7 +13,6 @@ DORIS_CONN_ID = "santhosh_doris"
 
 
 def _minio_client():
-    """Connects to MinIO using available Airflow connection."""
     try:
         conn = BaseHook.get_connection("santhosh_minio")
     except Exception:
@@ -29,7 +27,6 @@ def _minio_client():
 
 
 def _doris_conn():
-    """Connects to Apache Doris under the specific schema."""
     import pymysql
 
     conn = BaseHook.get_connection(DORIS_CONN_ID)
@@ -55,14 +52,12 @@ def task6_incremental_etl():
     @task
     def find_new_files() -> list[str]:
         client = _minio_client()
-        # Discover all CSV files in the designated folder
         all_files = [
             obj.object_name
             for obj in client.list_objects(BUCKET, prefix=PREFIX, recursive=True)
             if obj.object_name.endswith(".csv")
         ]
 
-        # Check existing successful ingestions
         conn = _doris_conn()
         try:
             with conn.cursor() as cur:
@@ -73,13 +68,10 @@ def task6_incremental_etl():
         finally:
             conn.close()
 
-        # Filter out files already processed
         new_files = [f for f in all_files if f not in already_done]
-
-        print(f"Detected in '{BUCKET}/{PREFIX}': {all_files}")
-        print(f"Already ingested (skipped): {sorted(already_done)}")
-        print(f"Eligible for processing: {new_files}")
-
+        print(f"All files detected: {all_files}")
+        print(f"Already successful: {sorted(already_done)}")
+        print(f"New files to process: {new_files}")
         return new_files
 
     @task
@@ -113,12 +105,12 @@ def task6_incremental_etl():
                         price = float(row["unit_price"])
                         cur.execute(
                             """
-                            INSERT INTO fact_orders (order_id, customer_id, order_date, quantity, unit_price, total_amount)
+                            INSERT INTO fact_orders (order_id, customer_key, order_date, quantity, unit_price, total_amount)
                             VALUES (%s, %s, %s, %s, %s, %s)
                             """,
                             (
                                 row["order_id"],
-                                row["customer_id"],
+                                int(row["customer_id"]),
                                 row["order_date"],
                                 qty,
                                 price,
@@ -126,7 +118,6 @@ def task6_incremental_etl():
                             ),
                         )
 
-                # Record success state only after rows are written
                 cur.execute(
                     """
                     INSERT INTO santhosh_ingestion_tracker (file_name, status, processed_at, record_count, error_message)
@@ -135,10 +126,9 @@ def task6_incremental_etl():
                     (file_key, len(rows)),
                 )
 
-            print(f"Successfully loaded {file_key}: {len(rows)} records -> status: success")
+            print(f"Processed {file_key}: {len(rows)} rows -> status: success")
 
         except Exception as exc:
-            # Idempotency safety: record failure to allow manual review or automatic retry
             with conn.cursor() as cur:
                 cur.execute(
                     """
