@@ -1,0 +1,2 @@
+TransactionId;ProductId;MsIsdn;BuId;CustomerNumber;IccId;PortStartDate;PortEndDate;PortCountry;PortType;PortingCode;RecipientOperatorCode;DonorOperatorCode;MNPOperator
+c9d55f6d-57d2-4afe-a2b0-ba009bef7710;482f26ef-1d8b-eb11-a2d1-005056a660b3;07418998432;82d6a2aa-c188-4375-9984-3a0bc1388c6a;SECS_41686_00103;893107091915897325;2026-02-05 13:59:15;2026-02-19 06:14:21;MNP-UK;OUTPORT;TLW046592;VO;TE;Syniverse
