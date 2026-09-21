@@ -6,18 +6,20 @@ from airflow.decorators import dag, task
 from airflow.hooks.base import BaseHook
 from minio import Minio
 
+# Specific configurations for Santhosh environment
 BUCKET = "test"
+PREFIX = "santhosh_raw_data/"
 SCHEMA = "santhosh_retail_analytics"
 DORIS_CONN_ID = "santhosh_doris"
 
 
 def _minio_client():
-    # Uses the standard minio connection in Airflow
+    """Connects to MinIO using available Airflow connection."""
     try:
         conn = BaseHook.get_connection("santhosh_minio")
     except Exception:
         conn = BaseHook.get_connection("minio_default")
-        
+
     return Minio(
         f"{conn.host}:{conn.port}",
         access_key=conn.login,
@@ -27,7 +29,9 @@ def _minio_client():
 
 
 def _doris_conn():
+    """Connects to Apache Doris under the specific schema."""
     import pymysql
+
     conn = BaseHook.get_connection(DORIS_CONN_ID)
     return pymysql.connect(
         host=conn.host,
@@ -51,24 +55,31 @@ def task6_incremental_etl():
     @task
     def find_new_files() -> list[str]:
         client = _minio_client()
+        # Discover all CSV files in the designated folder
         all_files = [
             obj.object_name
-            for obj in client.list_objects(BUCKET, prefix="raw/", recursive=True)
+            for obj in client.list_objects(BUCKET, prefix=PREFIX, recursive=True)
             if obj.object_name.endswith(".csv")
         ]
 
+        # Check existing successful ingestions
         conn = _doris_conn()
         try:
             with conn.cursor() as cur:
-                cur.execute("SELECT file_name FROM santhosh_ingestion_tracker WHERE status = 'success'")
+                cur.execute(
+                    "SELECT file_name FROM santhosh_ingestion_tracker WHERE status = 'success'"
+                )
                 already_done = {row[0] for row in cur.fetchall()}
         finally:
             conn.close()
 
+        # Filter out files already processed
         new_files = [f for f in all_files if f not in already_done]
-        print(f"All files detected in bucket '{BUCKET}': {all_files}")
-        print(f"Already successfully ingested: {sorted(already_done)}")
-        print(f"New files ready to process: {new_files}")
+
+        print(f"Detected in '{BUCKET}/{PREFIX}': {all_files}")
+        print(f"Already ingested (skipped): {sorted(already_done)}")
+        print(f"Eligible for processing: {new_files}")
+
         return new_files
 
     @task
@@ -81,7 +92,7 @@ def task6_incremental_etl():
             rows = list(csv.DictReader(io.StringIO(content)))
 
             with conn.cursor() as cur:
-                if "customers" in file_key:
+                if "customer" in file_key.lower():
                     for row in rows:
                         cur.execute(
                             """
@@ -96,7 +107,7 @@ def task6_incremental_etl():
                                 row["created_date"],
                             ),
                         )
-                else:
+                elif "order" in file_key.lower():
                     for row in rows:
                         qty = int(row["quantity"])
                         price = float(row["unit_price"])
@@ -115,7 +126,7 @@ def task6_incremental_etl():
                             ),
                         )
 
-                # Upsert into tracker marking success
+                # Record success state only after rows are written
                 cur.execute(
                     """
                     INSERT INTO santhosh_ingestion_tracker (file_name, status, processed_at, record_count, error_message)
@@ -123,9 +134,11 @@ def task6_incremental_etl():
                     """,
                     (file_key, len(rows)),
                 )
-            print(f"Successfully processed and recorded {file_key}: {len(rows)} records.")
+
+            print(f"Successfully loaded {file_key}: {len(rows)} records -> status: success")
 
         except Exception as exc:
+            # Idempotency safety: record failure to allow manual review or automatic retry
             with conn.cursor() as cur:
                 cur.execute(
                     """
