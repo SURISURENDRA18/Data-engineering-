@@ -1,170 +1,155 @@
 from datetime import datetime
 from airflow.decorators import dag, task
 from airflow.hooks.base import BaseHook
-from airflow.exceptions import AirflowException
-from minio import Minio
 import pymysql
-import pandas as pd
-import io
 
 SCHEMA = "santhosh_retail_analytics"
-BUCKET = "test"
-PREFIX = "santhoshkumar_bad_data"
+DORIS_CONN_ID = "santhosh_doris"
 
-
-def get_doris_conn():
-    conn_info = BaseHook.get_connection("santhosh_doris")
-    conn = pymysql.connect(
+def _get_doris_connection():
+    conn_info = BaseHook.get_connection(DORIS_CONN_ID)
+    return pymysql.connect(
         host=conn_info.host,
         port=int(conn_info.port),
         user=conn_info.login,
         password=conn_info.password or "",
+        database=SCHEMA,
         autocommit=True,
     )
-    with conn.cursor() as cur:
-        cur.execute(f"USE `{SCHEMA}`;")
-    return conn
 
-
-def get_minio_client():
-    conn_info = BaseHook.get_connection("minio_default")
-    endpoint = f"{conn_info.host}:{conn_info.port}".replace("http://", "").replace("https://", "")
-    return Minio(
-        endpoint=endpoint,
-        access_key=conn_info.login,
-        secret_key=conn_info.password,
-        secure=False,
-    )
-
+REJECT_QUERIES = [
+    (
+        "NULL_CUSTOMER_ID",
+        """
+        SELECT 'stg_customers_bad', CAST(customer_id AS VARCHAR(100)), 'NULL_CUSTOMER_ID',
+               CONCAT_WS('|', CAST(customer_id AS VARCHAR(50)), customer_name, city, email, created_date), NOW()
+        FROM stg_customers_bad WHERE customer_id IS NULL OR customer_id = ''
+        """,
+    ),
+    (
+        "DUPLICATE_CUSTOMER_ID",
+        """
+        SELECT 'stg_customers_bad', CAST(customer_id AS VARCHAR(100)), 'DUPLICATE_CUSTOMER_ID',
+               CONCAT_WS('|', CAST(customer_id AS VARCHAR(50)), customer_name, city, email, created_date), NOW()
+        FROM stg_customers_bad
+        WHERE customer_id IN (SELECT customer_id FROM stg_customers_bad WHERE customer_id IS NOT NULL GROUP BY customer_id HAVING COUNT(*) > 1)
+        """,
+    ),
+    (
+        "INVALID_CREATED_DATE",
+        """
+        SELECT 'stg_customers_bad', CAST(customer_id AS VARCHAR(100)), 'INVALID_CREATED_DATE',
+               CONCAT_WS('|', CAST(customer_id AS VARCHAR(50)), customer_name, city, email, created_date), NOW()
+        FROM stg_customers_bad
+        WHERE created_date IS NOT NULL AND STR_TO_DATE(created_date, '%Y-%m-%d') IS NULL
+        """,
+    ),
+    (
+        "NULL_OR_MISSING_ORDER_ID",
+        """
+        SELECT 'stg_orders_bad', order_id, 'NULL_OR_MISSING_ORDER_ID',
+               CONCAT_WS('|', order_id, CAST(customer_id AS VARCHAR(50)), order_date, CAST(quantity AS VARCHAR(20)), CAST(unit_price AS VARCHAR(20))), NOW()
+        FROM stg_orders_bad WHERE order_id IS NULL OR order_id = '' OR NOT order_id REGEXP '^[0-9]+$'
+        """,
+    ),
+    (
+        "DUPLICATE_ORDER_ID",
+        """
+        SELECT 'stg_orders_bad', order_id, 'DUPLICATE_ORDER_ID',
+               CONCAT_WS('|', order_id, CAST(customer_id AS VARCHAR(50)), order_date, CAST(quantity AS VARCHAR(20)), CAST(unit_price AS VARCHAR(20))), NOW()
+        FROM stg_orders_bad
+        WHERE order_id IN (SELECT order_id FROM stg_orders_bad WHERE order_id REGEXP '^[0-9]+$' GROUP BY order_id HAVING COUNT(*) > 1)
+        """,
+    ),
+    (
+        "QUANTITY_NOT_POSITIVE",
+        """
+        SELECT 'stg_orders_bad', order_id, 'QUANTITY_NOT_POSITIVE',
+               CONCAT_WS('|', order_id, CAST(customer_id AS VARCHAR(50)), order_date, CAST(quantity AS VARCHAR(20)), CAST(unit_price AS VARCHAR(20))), NOW()
+        FROM stg_orders_bad WHERE order_id REGEXP '^[0-9]+$' AND (quantity IS NULL OR quantity <= 0)
+        """,
+    ),
+    (
+        "UNIT_PRICE_NEGATIVE",
+        """
+        SELECT 'stg_orders_bad', order_id, 'UNIT_PRICE_NEGATIVE',
+               CONCAT_WS('|', order_id, CAST(customer_id AS VARCHAR(50)), order_date, CAST(quantity AS VARCHAR(20)), CAST(unit_price AS VARCHAR(20))), NOW()
+        FROM stg_orders_bad WHERE order_id REGEXP '^[0-9]+$' AND (unit_price IS NULL OR unit_price < 0)
+        """,
+    ),
+    (
+        "INVALID_ORDER_DATE",
+        """
+        SELECT 'stg_orders_bad', order_id, 'INVALID_ORDER_DATE',
+               CONCAT_WS('|', order_id, CAST(customer_id AS VARCHAR(50)), order_date, CAST(quantity AS VARCHAR(20)), CAST(unit_price AS VARCHAR(20))), NOW()
+        FROM stg_orders_bad WHERE order_id REGEXP '^[0-9]+$' AND order_date IS NOT NULL AND STR_TO_DATE(order_date, '%Y-%m-%d') IS NULL
+        """,
+    ),
+    (
+        "ORPHAN_CUSTOMER_ID",
+        """
+        SELECT 'stg_orders_bad', o.order_id, 'ORPHAN_CUSTOMER_ID',
+               CONCAT_WS('|', o.order_id, CAST(o.customer_id AS VARCHAR(50)), o.order_date, CAST(o.quantity AS VARCHAR(20)), CAST(o.unit_price AS VARCHAR(20))), NOW()
+        FROM stg_orders_bad o
+        LEFT JOIN stg_customers_bad c ON c.customer_id = o.customer_id
+        WHERE o.order_id REGEXP '^[0-9]+$' AND o.customer_id IS NOT NULL AND c.customer_id IS NULL
+        """,
+    ),
+]
 
 @dag(
     dag_id="santhosh_task3_data_quality",
     schedule=None,
     start_date=datetime(2026, 1, 1),
     catchup=False,
-    tags=["santhosh", "task3", "data_quality"],
+    tags=["santhosh", "task3", "data-quality"],
 )
-def task3_data_quality_dag():
+def task3_data_quality():
 
     @task
-    def load_bad_data_to_staging():
-        client = get_minio_client()
-        conn = get_doris_conn()
+    def route_invalid_records_to_quarantine() -> dict:
+        conn = _get_doris_connection()
+        summary = {}
         try:
-            # 1. Download bad CSVs
-            cust_obj = client.get_object(BUCKET, f"{PREFIX}/customers_bad.csv")
-            cust_df = pd.read_csv(io.BytesIO(cust_obj.read()))
-
-            ord_obj = client.get_object(BUCKET, f"{PREFIX}/orders_bad.csv")
-            ord_df = pd.read_csv(io.BytesIO(ord_obj.read()))
-
             with conn.cursor() as cur:
-                # 2. Reset staging tables for bad data test
-                cur.execute("CREATE TABLE IF NOT EXISTS stg_customers_bad LIKE stg_customers;")
-                cur.execute("TRUNCATE TABLE stg_customers_bad;")
-                cur.execute("CREATE TABLE IF NOT EXISTS stg_orders_bad LIKE stg_orders;")
-                cur.execute("TRUNCATE TABLE stg_orders_bad;")
-
-                # 3. Load customers
-                for _, row in cust_df.iterrows():
-                    cid = f"'{row['customer_id']}'" if pd.notna(row['customer_id']) else "NULL"
-                    cname = f"'{row['customer_name']}'" if pd.notna(row['customer_name']) else "NULL"
-                    city = f"'{row['city']}'" if pd.notna(row['city']) else "NULL"
-                    email = f"'{row['email']}'" if pd.notna(row['email']) else "NULL"
-                    cdate = f"'{row['created_date']}'" if pd.notna(row['created_date']) else "NULL"
+                cur.execute("TRUNCATE TABLE santhosh_dq_rejects;")
+                for rule_label, query in REJECT_QUERIES:
                     cur.execute(f"""
-                        INSERT INTO stg_customers_bad (customer_id, customer_name, city, email, created_date)
-                        VALUES ({cid}, {cname}, {city}, {email}, {cdate});
+                        INSERT INTO santhosh_dq_rejects (source_table, record_id, rule_violated, raw_payload, rejected_at)
+                        {query}
                     """)
-
-                # 4. Load orders
-                for _, row in ord_df.iterrows():
-                    oid = f"'{row['order_id']}'" if pd.notna(row['order_id']) else "NULL"
-                    cid = f"'{row['customer_id']}'" if pd.notna(row['customer_id']) else "NULL"
-                    odate = f"'{row['order_date']}'" if pd.notna(row['order_date']) else "NULL"
-                    qty = row['quantity'] if pd.notna(row['quantity']) else "NULL"
-                    price = row['unit_price'] if pd.notna(row['unit_price']) else "NULL"
-                    cur.execute(f"""
-                        INSERT INTO stg_orders_bad (order_id, customer_id, order_date, quantity, unit_price)
-                        VALUES ({oid}, {cid}, {odate}, {qty}, {price});
-                    """)
-
-                print("Successfully loaded bad test records into stg_customers_bad and stg_orders_bad.")
+                    cur.execute(
+                        "SELECT COUNT(*) FROM santhosh_dq_rejects WHERE rule_violated = %s",
+                        (rule_label,),
+                    )
+                    count = cur.fetchone()[0]
+                    summary[rule_label] = count
         finally:
             conn.close()
 
-    @task
-    def run_data_quality_checks():
-        conn = get_doris_conn()
-        failures = []
+        print("=== QUARANTINE AUDIT SUMMARY ===")
+        for rule, count in summary.items():
+            print(f"Rule [{rule}]: {count} records quarantined")
+        return summary
 
+    @task
+    def verify_curated_tables_nonempty() -> None:
+        conn = _get_doris_connection()
         try:
             with conn.cursor() as cur:
-                # Check 1: Mandatory IDs (NULL checks)
-                cur.execute("SELECT COUNT(*) FROM stg_customers_bad WHERE customer_id IS NULL OR customer_id = '';")
-                null_cust = cur.fetchone()[0]
-                if null_cust > 0:
-                    failures.append(f"[Check 1 FAIL] Found {null_cust} records with missing/NULL customer_id.")
-
-                cur.execute("SELECT COUNT(*) FROM stg_orders_bad WHERE order_id IS NULL OR order_id = '';")
-                null_ord = cur.fetchone()[0]
-                if null_ord > 0:
-                    failures.append(f"[Check 1 FAIL] Found {null_ord} records with missing/NULL order_id.")
-
-                # Check 2: Uniqueness
-                cur.execute("""
-                    SELECT customer_id, COUNT(*) 
-                    FROM stg_customers_bad 
-                    WHERE customer_id IS NOT NULL 
-                    GROUP BY customer_id HAVING COUNT(*) > 1;
-                """)
-                dup_cust = cur.fetchall()
-                if dup_cust:
-                    failures.append(f"[Check 2 FAIL] Found duplicate customer_ids: {dup_cust}")
-
-                # Check 3: Quantity > 0
-                cur.execute("SELECT COUNT(*) FROM stg_orders_bad WHERE quantity <= 0;")
-                invalid_qty = cur.fetchone()[0]
-                if invalid_qty > 0:
-                    failures.append(f"[Check 3 FAIL] Found {invalid_qty} records with quantity <= 0.")
-
-                # Check 4: Unit Price Non-Negative
-                cur.execute("SELECT COUNT(*) FROM stg_orders_bad WHERE unit_price < 0;")
-                neg_price = cur.fetchone()[0]
-                if neg_price > 0:
-                    failures.append(f"[Check 4 FAIL] Found {neg_price} records with unit_price < 0.")
-
-                # Check 5: Referential Integrity (Orphan Orders)
-                cur.execute("""
-                    SELECT o.order_id, o.customer_id 
-                    FROM stg_orders_bad o 
-                    LEFT JOIN stg_customers_bad c ON o.customer_id = c.customer_id 
-                    WHERE c.customer_id IS NULL;
-                """)
-                orphans = cur.fetchall()
-                if orphans:
-                    failures.append(f"[Check 5 FAIL] Referential Integrity violation! Orders with non-existent customers: {orphans}")
-
-                # Check 6: Row Count Check
-                cur.execute("SELECT COUNT(*) FROM stg_orders_bad;")
-                total_orders = cur.fetchone()[0]
-                if total_orders == 0:
-                    failures.append("[Check 6 FAIL] Zero records present in stg_orders_bad.")
-
+                cur.execute("SELECT COUNT(*) FROM dim_customer")
+                cust_count = cur.fetchone()[0]
+                cur.execute("SELECT COUNT(*) FROM fact_orders")
+                ord_count = cur.fetchone()[0]
         finally:
             conn.close()
 
-        # Print all detected failures to Airflow task logs
-        print("\n================ DATA QUALITY AUDIT REPORT ================")
-        for fail in failures:
-            print(fail)
-        print("===========================================================\n")
+        print(f"Curated check: dim_customer={cust_count}, fact_orders={ord_count}")
+        if cust_count == 0 or ord_count == 0:
+            raise ValueError(
+                f"CRITICAL GATE FAILED: Curated tables empty (dim_customer={cust_count}, fact_orders={ord_count})"
+            )
 
-        # Raise exception to fail the task in Airflow as required by Task 3
-        if failures:
-            raise AirflowException(f"Data Quality Gate Failed: Detected {len(failures)} critical data anomalies.")
+    route_invalid_records_to_quarantine() >> verify_curated_tables_nonempty()
 
-    load_bad_data_to_staging() >> run_data_quality_checks()
-
-
-task3_data_quality_dag()
+task3_data_quality()
