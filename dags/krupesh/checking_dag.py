@@ -2,11 +2,11 @@ from datetime import datetime
 from airflow.decorators import dag, task
 
 @dag(
-    dag_id="ganesh_hello_world",
+    dag_id="checking_dag",
     schedule=None,
     start_date=datetime(2026, 1, 1),
     catchup=False,
-    tags=["test", "ganesh"],
+    tags=["check", "krupesh"],
 )
 def hello_world_dag():
     @task
