@@ -91,12 +91,12 @@ def validate_and_route_landing_files():
 with DAG(
     dag_id="santhosh_actives_ingestion",
     default_args=default_args,
-    schedule_interval=None,
+    schedule=None,
     catchup=False,
     max_active_runs=1,
     tags=["assessment", "actives_feed"],
 ) as dag:
-
+    
     validate_files_task = PythonOperator(
         task_id="validate_and_route_files",
         python_callable=validate_and_route_landing_files,
