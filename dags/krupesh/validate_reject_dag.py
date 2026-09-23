@@ -17,7 +17,7 @@ with DAG(
         
         # 1. We activate the Cloud Claw. 
         # (The company will provide the real 'aws_conn_id' in your access sheet)
-        s3 = S3Hook(aws_conn_id="minio_default")
+        s3 = S3Hook(aws_conn_id="krupesh_minio")
         
         # 2. We define our Cloud Bucket and Folder exactly as the assessment requested
         bucket_name = "crushftp"
