@@ -21,13 +21,13 @@ class RawTableLoader:
 
     def is_file_processed(self, file_name: str) -> bool:
         """Enforces idempotency by checking if the file already exists in the audit table."""
+        # 1. Audit Table (matches audit_sql insert query)
         create_audit_sql = f"""
         CREATE TABLE IF NOT EXISTS {self.config.audit_table} (
             file_name VARCHAR(255) NOT NULL,
-            load_timestamp DATETIME NOT NULL,
             records_loaded INT DEFAULT 0,
             records_rejected INT DEFAULT 0,
-            status VARCHAR(50) NOT NULL
+            loaded_at DATETIME NOT NULL
         )
         UNIQUE KEY(file_name)
         DISTRIBUTED BY HASH(file_name) BUCKETS 1
@@ -37,13 +37,46 @@ class RawTableLoader:
         """
         self.doris_hook.run(create_audit_sql)
 
-        # Check audit log for matching filename entry
+        # 2. Reject Table (matches reject_sql insert query)
+        create_reject_sql = f"""
+        CREATE TABLE IF NOT EXISTS {self.config.reject_table} (
+            iccid VARCHAR(64) NOT NULL,
+            file_name VARCHAR(255) NOT NULL,
+            reject_reason VARCHAR(100) NOT NULL,
+            companyid VARCHAR(64),
+            customernumber VARCHAR(64),
+            raw_row_record TEXT,
+            rejected_at DATETIME NOT NULL
+        )
+        DUPLICATE KEY(iccid, file_name)
+        DISTRIBUTED BY HASH(iccid) BUCKETS 3
+        PROPERTIES (
+            "replication_num" = "1"
+        );
+        """
+        self.doris_hook.run(create_reject_sql)
+
+        # 3. Target Raw Table (dynamic schema based on expected_columns + metadata)
+        cols_ddl = [f"`{col}` VARCHAR(255)" for col in self.config.expected_columns if col != "iccid"]
+        create_target_sql = f"""
+        CREATE TABLE IF NOT EXISTS {self.config.target_table} (
+            iccid VARCHAR(64) NOT NULL,
+            {', '.join(cols_ddl)},
+            file_name VARCHAR(255),
+            loaded_at DATETIME
+        )
+        DUPLICATE KEY(iccid)
+        DISTRIBUTED BY HASH(iccid) BUCKETS 3
+        PROPERTIES (
+            "replication_num" = "1"
+        );
+        """
+        self.doris_hook.run(create_target_sql)
+
+        # 4. Check audit log for matching filename entry
         sql = f"SELECT 1 FROM {self.config.audit_table} WHERE file_name = %s LIMIT 1;"
         records = self.doris_hook.get_records(sql, parameters=(file_name,))
         return bool(records)
-
-        # Return True if a prior run registered this file
-        return len(records) > 0
 
     def parse_content(self, file_name: str, raw_bytes: bytes) -> pd.DataFrame:
         """Decompresses gzip files if necessary and parses semicolon-delimited CSV into a DataFrame."""
@@ -70,7 +103,7 @@ class RawTableLoader:
         normalized_map = {col.replace("_", ""): col for col in expected}
         df = df.rename(columns=normalized_map)
 
-        # Reindex to force exact 46 columns, populating missing columns with empty string
+        # Reindex to force exact canonical columns, populating missing columns with empty string
         df = df.reindex(columns=expected, fill_value="")
 
         return df
