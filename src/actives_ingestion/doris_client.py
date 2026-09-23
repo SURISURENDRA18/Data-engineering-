@@ -227,14 +227,26 @@ class DorisClient:
 
     def _stream_load_http(self, rows: list[dict[str, Any]]) -> int:
         """Perform Doris HTTP Stream Load using JSON format."""
-        url = f"http://{self.config.host}:{self.config.http_port}/api/{self.config.database}/{self.config.raw_table}/_stream_load"
+        connection = get_airflow_connection_details("doris_default")
+        host = self.config.host
+        http_port = self.config.http_port
+        user = self.config.user
+        password = self.config.password
+        if connection:
+            host = str(connection["host"])
+            user = str(connection["login"])
+            password = str(connection["password"])
+            extra = connection.get("extra") or {}
+            http_port = int(extra.get("http_port") or extra.get("httpPort") or http_port)
+
+        url = f"http://{host}:{http_port}/api/{self.config.database}/{self.config.raw_table}/_stream_load"
         headers = {
             "format": "json",
             "strip_outer_array": "true",
             "Expect": "100-continue",
         }
         body = json.dumps(rows).encode("utf-8")
-        auth = HTTPBasicAuth(self.config.user, self.config.password)
+        auth = HTTPBasicAuth(user, password)
 
         response = requests.put(
             url,

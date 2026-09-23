@@ -6,6 +6,31 @@ from actives_ingestion.config import DorisConfig
 from actives_ingestion.doris_client import DorisClient
 
 
+def test_stream_load_uses_airflow_connection(monkeypatch):
+    """Stream Load uses the deployed Airflow connection, including its HTTP port."""
+    response = MagicMock(status_code=200)
+    response.json.return_value = {"Status": "Success", "NumberLoadedRows": 1}
+    put = MagicMock(return_value=response)
+    monkeypatch.setattr("actives_ingestion.doris_client.requests.put", put)
+    monkeypatch.setattr(
+        "actives_ingestion.doris_client.get_airflow_connection_details",
+        lambda _conn_id: {
+            "host": "doris.internal",
+            "port": 9030,
+            "login": "airflow-user",
+            "password": "airflow-password",
+            "extra": {"http_port": 8040},
+        },
+    )
+
+    client = DorisClient(config=DorisConfig(database="actives_db", raw_table="raw_actives_daily"))
+    assert client._stream_load_http([{"customernumber": "1", "iccid": "2"}]) == 1
+
+    args, kwargs = put.call_args
+    assert args[0] == "http://doris.internal:8040/api/actives_db/raw_actives_daily/_stream_load"
+    assert kwargs["auth"].username == "airflow-user"
+
+
 def test_in_memory_doris_client_schema():
     client = DorisClient(in_memory=True)
     keys = client.get_table_unique_keys("raw_actives_daily")
