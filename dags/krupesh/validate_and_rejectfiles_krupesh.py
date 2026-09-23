@@ -15,6 +15,7 @@ with DAG(
     # 2. THE TASK
     @task
     def scan_and_sort_files():
+        import gzip
         print("Starting Airflow Cloud Validator...")
         
         s3 = S3Hook(aws_conn_id="krupesh_minio")
