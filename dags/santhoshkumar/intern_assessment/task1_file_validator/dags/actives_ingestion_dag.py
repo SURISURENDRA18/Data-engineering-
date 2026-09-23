@@ -38,7 +38,7 @@ def validate_and_route_landing_files():
         conn_id=config.MINIO_CONN_ID, bucket_name=config.BUCKET_NAME
     )
 
-    # 1. Discover already processed files
+    # 1. Discover already processed files to avoid re-processing the same landing files
     processed_filenames = storage.get_already_processed_filenames(
         validated_prefix=config.VALIDATED_PREFIX,
         rejected_prefix=config.REJECTED_PREFIX,
@@ -65,7 +65,11 @@ def validate_and_route_landing_files():
     for key in sorted(all_landing_keys):
         filename = key.split("/")[-1]
 
-        # Skip files already processed
+        # Ignore files that do not belong to the Actives feed
+        if "Active" not in filename:
+            continue
+
+        # Skip files already processed (landing original remains intact)
         if filename in processed_filenames:
             logger.info("File %s already processed previously. Skipping.", filename)
             continue
@@ -82,20 +86,19 @@ def validate_and_route_landing_files():
         )
 
         if is_valid:
-            # Save validated file directly using in-memory bytes
+            # Copy valid data to validated prefix without deleting from landing
             validated_dest_key = f"{config.VALIDATED_PREFIX.rstrip('/')}/{filename}"
             storage.upload_bytes(
                 dest_key=validated_dest_key,
                 data=raw_bytes,
             )
-            logger.info("PASSED validation and saved: %s", validated_dest_key)
+            logger.info("PASSED validation and stored copy at: %s", validated_dest_key)
 
             parsed = FileValidator.parse_filename(filename)
             if parsed:
                 reg, _, _, seq_num, _ = parsed
                 region_sequences[reg].append(seq_num)
 
-            # Record clean passed file in summary
             audit_summary_records.append({
                 "Active File Name": filename,
                 "Status": "PASSED",
@@ -106,17 +109,17 @@ def validate_and_route_landing_files():
                 "Reason": "N/A"
             })
         else:
-            # 1. Save original rejected file directly using in-memory bytes
+            # Save copy of rejected file without deleting original from landing
             rejected_dest_key = f"{config.REJECTED_PREFIX.rstrip('/')}/{reject_reason}/{filename}"
             storage.upload_bytes(
                 dest_key=rejected_dest_key,
                 data=raw_bytes,
             )
             logger.warning(
-                "REJECTED file %s. Reason: %s (saved to %s)", filename, reject_reason, rejected_dest_key
+                "REJECTED file %s. Reason: %s (copied to %s)", filename, reject_reason, rejected_dest_key
             )
 
-            # 2. Resilient Row Filtering if invalid_column_count
+            # Resilient Row Filtering if invalid_column_count
             if reject_reason == "invalid_column_count":
                 cleaned_bytes, audit_json, val_cnt, drop_cnt = (
                     FileValidator.extract_valid_rows_and_audit(
@@ -124,7 +127,7 @@ def validate_and_route_landing_files():
                     )
                 )
 
-                # Store per-file JSON manifest in rejected folder
+                # Upload JSON manifest to rejected prefix
                 audit_key = f"{config.REJECTED_PREFIX.rstrip('/')}/invalid_column_count/audit_{filename}.json"
                 storage.upload_bytes(
                     dest_key=audit_key,
