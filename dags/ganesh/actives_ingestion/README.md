@@ -69,14 +69,14 @@ scripts/run_local.py                   Runs the pipeline outside Airflow, for lo
 
 ```
 SOURCE                  VALIDATION              VALIDATED             TARGET
-MinIO                   8 ordered checks         MinIO                Doris
-crushftp/                (src/validators/)       mediation/            database_ganesh
+MinIO (shared)          8 ordered checks         MinIO (own namespace) Doris
+crushftp/                (src/validators/)       mediation/ganesh/      database_ganesh
 mediation/landing/  --->                    ---> validated/      ---> .raw_actives_daily
                                                                         (grain: 1 row/iccid)
                               |                                        |
                               v                                        v
-                         rejected/<reason>/                    raw_actives_daily_rejected
-                                                                 (row-level rejects)
+                    mediation/ganesh/                             raw_actives_daily_rejected
+                    rejected/<reason>/                             (row-level rejects)
 
                                                                  file_processing_log
                                                                  (control/tracking table,
@@ -190,32 +190,30 @@ just force a join on checksum whenever Task 2 needs "was this file
 validated and not yet loaded," duplicating file_name/region/sequence
 across two tables for no benefit.
 
-**Why the checksum table, not the checksum table *alone***: once a file
-is moved out of `landing/`, a rerun's listing simply won't see it again
-— that alone makes re-validation and re-loading of an *already-moved*
-file impossible by construction, with no database lookup needed. The
-`file_processing_log` table exists specifically for the cases that
-*do* need history: detecting a **new** file (still sitting in
-`landing/`) that's a byte-identical re-delivery of something already
-processed, and establishing the per-region sequence baseline. That's
-why files rejected by checks 1–6 (bad filename, wrong schema, etc.)
-never get a tracking row at all — content identity doesn't matter for
-files that were never going to be considered "the same Actives file"
-again, and skipping the checksum computation for them is exactly what
-keeps validation cheap for the ~2,400 non-Actives files in the shared
-landing zone.
+**Why the checksum table, not just a filename check (revised)**: since
+`landing/` is now non-destructive (files are copied, never deleted —
+see **Non-destructive routing** above), Task 1's *first* idempotency
+check is cheap and filename-based: `list_processed_filenames()` lists
+`mediation/ganesh/validated/` and `mediation/ganesh/rejected/<reason>/`
+once per run, and any landing file whose name is already present there
+is skipped before any check runs at all. Files rejected by checks 1–6
+never reach `file_processing_log` — the filename check alone is
+sufficient for them, which is also what keeps validation cheap for the
+thousands of non-Actives files in the shared landing zone (no checksum,
+no DB round-trip). `file_processing_log` exists for what a filename
+check *can't* catch: a **different**-named file that's a byte-identical
+re-delivery of content already processed (check 7, content-based), and
+the per-region sequence baseline (check 8) — both require tracking
+content identity, not just "have I seen this filename before."
 
-**Crash-safety ordering**: the tracking row is always written *before*
-the corresponding MinIO move (Task 1) or before a file is marked
-`LOADED` (Task 2), so a crash between the two leaves a resumable state.
-Specifically for Task 1: if a crash happens after the tracking write but
-before the move completes, the file is still sitting in `landing/` on
-the next run. Re-validating it would recompute the same checksum and
-find its own tracking row — which `_validate_one_file` in
-`file_validation_pipeline.py` detects (by comparing the row's
-`landing_key` to the current file's key) and treats as **resuming a
-stalled move**, not a duplicate, re-attempting the move to the
-already-recorded destination without rewriting tracking state.
+**Crash-safety ordering**: the tracking row is written *before* the
+corresponding MinIO copy (Task 1) or before a file is marked `LOADED`
+(Task 2), so a crash between the two leaves a resumable, non-ambiguous
+state. Because routing is a copy (not a move), there's no special
+"resume" logic needed — `route_file()`'s underlying `copy_object` call
+is naturally idempotent (re-copying identical content to the same
+destination is a harmless no-op), so a crash mid-copy simply means the
+same copy happens again on the next run.
 
 ## Duplicate-file strategy
 
@@ -418,6 +416,29 @@ synthetic `ZZZ` test files/rows (`ZZZ_99_...` and `ZZZ_98_...`) were
 deleted from `validated/`, `raw_actives_daily`, and `file_processing_log`
 after each verification, leaving no test data behind either time.
 
+**Everything above this point describes the pipeline as it behaved
+during initial development and is kept as an accurate historical
+record — it is *not* how the pipeline behaves now.** The bulk-moving
+behavior described above (deleting matched files from the shared
+`landing/` zone, scanning every file regardless of feed type) turned
+out to disrupt other candidates' testing in this shared environment,
+per direct feedback from a mentor. The pipeline was subsequently
+rewritten:
+- Routing is now copy-only (`route_file`) — `landing/` is never
+  depleted, for anyone.
+- Only filenames containing `"Active"` are read or touched at all.
+- Output is namespaced to `mediation/ganesh/validated/` and
+  `mediation/ganesh/rejected/<reason>/`, matching the convention
+  independently adopted by other candidates in this same environment,
+  rather than the flat shared paths used above.
+
+Both changes were re-verified live (small, scoped checks against real
+MinIO touching only uniquely-named test objects, not another bulk run)
+and the full pipeline was subsequently triggered for real through the
+actual Airflow UI/scheduler — see **Non-destructive routing** under
+Validation rules, and **Idempotency strategy**, for the current,
+accurate description of how the deployed pipeline behaves.
+
 ## Assumptions (things this document left ambiguous)
 
 1. **Scan scope (revised)**: `mediation/landing/` in the real environment
@@ -468,7 +489,16 @@ after each verification, leaving no test data behind either time.
    `@dag(...)` decorator.
 10. `landing/`, `validated/`, and `rejected/` are prefixes within one
     bucket (`crushftp`), not separate buckets — confirmed against the
-    real MinIO instance.
+    real MinIO instance. `landing/` (`mediation/landing/`) is shared —
+    every candidate's pipeline in this environment reads from the same
+    source. Output, however, is namespaced per-candidate:
+    `mediation/ganesh/validated/` and `mediation/ganesh/rejected/<reason>/`,
+    matching the convention independently adopted by other candidates'
+    pipelines in this same environment (`mediation/santhosh/validated/`,
+    `mediation/krupesh/rejected/`) — confirmed by inspecting the real
+    bucket, not assumed. The assessment text itself doesn't mandate
+    per-candidate output scoping; this was adopted after the fact for
+    consistency with peers sharing the same bucket.
 
 ## Known limitations
 
