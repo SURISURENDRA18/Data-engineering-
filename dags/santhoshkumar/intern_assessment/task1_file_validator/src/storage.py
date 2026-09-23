@@ -57,3 +57,13 @@ class StorageManager:
         """Copies file to rejected/<reason>/ destination prefix."""
         dest_key = f"{rejected_prefix.rstrip('/')}/{reason}/{filename}"
         self.copy_file(source_key, dest_key)
+
+    def upload_bytes(self, dest_key: str, data: bytes) -> None:
+        """Uploads raw bytes to MinIO under the specified key."""
+        self.hook.load_bytes(
+            bytes_data=data,
+            key=dest_key,
+            bucket_name=self.bucket,
+            replace=True,
+        )
+        logger.info("Uploaded bytes to: %s", dest_key)
