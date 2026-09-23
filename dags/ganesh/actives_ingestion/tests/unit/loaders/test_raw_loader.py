@@ -61,6 +61,18 @@ def test_apply_row_level_rules_checks_iccid_before_other_reasons():
     assert rejected.iloc[0]["reject_reason"] == RowRejectReason.NULL_OR_EMPTY_ICCID
 
 
+def test_read_validated_file_as_dataframe_pads_missing_trailing_fields():
+    """Real files here routinely omit trailing optional columns entirely
+    (no trailing delimiters at all) -- these are implicitly empty, not a
+    parse error, matching check 6's row_structure_validator."""
+    short_bytes = (FIXTURES / "short_row_content.csv").read_bytes()
+    df = read_validated_file_as_dataframe(short_bytes, "f.csv")
+    assert len(df) == 2
+    assert len(df.columns) == 46
+    # the short row's missing trailing fields must come through as "", not raise/misalign
+    assert (df.iloc[1] == "").any()
+
+
 def test_dedup_rows_keeps_last_occurrence():
     df = read_validated_file_as_dataframe(_valid_bytes(), "f.csv")
     df.loc[1, "iccid"] = df.loc[0, "iccid"]  # force a duplicate iccid

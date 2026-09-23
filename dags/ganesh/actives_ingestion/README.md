@@ -142,9 +142,22 @@ check and copied to `rejected/<reason>/`:
 | 3 | Has ≥1 data row below the header | `header_only` |
 | 4 | Readable text, not binary/corrupted | `not_text_format` |
 | 5 | Header has the 46 expected columns, in order | `invalid_column_count` |
-| 6 | Every data row's field count matches the header | `invalid_column_count` |
+| 6 | No data row has *more* fields than the header (missing trailing fields are padded as empty, not rejected — see below) | `invalid_column_count` |
 | 7 | Not an exact content duplicate of a previously-processed file | `duplicate` |
 | 8 | Sequence number not repeated/out of order for its region | `sequence_invalid` |
+
+**Check 6, revised**: a missing *trailing* field is treated as implicitly
+empty, the same way two consecutive delimiters (`;;`) represent an
+explicit empty field mid-row. Real Actives files in this environment
+routinely omit trailing optional columns entirely (no trailing
+delimiters at all) rather than emitting them as empty — confirmed by
+inspecting real file bytes and traced to the feed simulator's own
+checked-in seed sample (see **Live verification results** below). Only
+a row with *more* fields than the header is rejected. Short rows are
+padded with `""` up to 46 fields for both the validation check and
+Task 2's downstream parsing, so a file that's ragged in exactly this
+way now passes Task 1 and loads correctly in Task 2 with the missing
+trailing columns stored as empty strings.
 
 Efficiency note: checks 1–6 need only the object's key/size and, from
 check 3 onward, its bytes. Checks 7–8 are the first point a SHA-256
@@ -371,10 +384,9 @@ already reflected in the code:
    expected fields — trailing optional columns (roughly PlanName
    through EID) appear to be omitted entirely by the source system when
    blank, rather than left as empty `;` placeholders. Per explicit
-   direction, check 6 stays exactly as specified (reject on any field-
+   direction at the time, check 6 was kept strict (reject on any field-
    count mismatch) rather than padding short rows — this is a real
-   characteristic of the live feed, not a bug, and is worth flagging to
-   whoever owns the upstream export if files are expected to pass.
+   characteristic of the live feed, not a bug.
 
    This was traced to its root: `dags/others/feed_simulator/generators/active_generator.py`
    generates the daily Active files by copying random rows out of a
@@ -382,9 +394,22 @@ already reflected in the code:
    That seed file itself already has 87 of 99 rows with only 36 of 46
    fields — so the raggedness isn't introduced by the generator, it's
    baked into the original (evidently real/anonymized) sample data
-   whoever built the simulator sourced. This makes check 6's strict
-   rejection look like intended behavior being correctly exercised,
-   not an artificial edge case.
+   whoever built the simulator sourced.
+
+   **Revised** after direct feedback connecting this to a general
+   principle: a missing *trailing* field is still an implicitly empty
+   field, the same way two consecutive delimiters represent an explicit
+   empty field mid-row — real files here omit trailing optional columns
+   entirely (no trailing delimiters) rather than emitting them empty,
+   and that should not be treated as a missing column. Check 6 now
+   accepts a row with *fewer* fields than expected (padding the missing
+   trailing ones as `""`) and only rejects a row with *more* fields than
+   expected. Task 2's CSV parsing was changed to match (padding via
+   `csv.reader`, not `pd.read_csv` directly, which rejects ragged rows
+   outright). Verified against a real previously-rejected file: all
+   5,000 rows now parse correctly, `iccid` populated on every row,
+   trailing fields correctly empty rather than misaligned. See
+   **Validation rules (Task 1)** above for the current behavior.
 3. **Client library migration re-verified live.** After discovering this
    repo's established convention (`airflow.decorators` + `BaseHook` +
    the `minio` library, used consistently across `task1_etl_dag.py`

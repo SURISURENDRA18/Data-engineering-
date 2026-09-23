@@ -9,7 +9,8 @@ LANDING = "mediation/landing/"
 VALID_CONTENT = (FIXTURES / "valid_actives_content.csv").read_bytes()
 HEADER_ONLY_CONTENT = (FIXTURES / "header_only_content.csv").read_bytes()
 INVALID_HEADER_CONTENT = (FIXTURES / "invalid_header_content.csv").read_bytes()
-INVALID_ROW_CONTENT = (FIXTURES / "invalid_row_content.csv").read_bytes()
+TOO_MANY_FIELDS_CONTENT = (FIXTURES / "too_many_fields_content.csv").read_bytes()
+SHORT_ROW_CONTENT = (FIXTURES / "short_row_content.csv").read_bytes()
 
 
 def _put(s3_client, filename: str, body: bytes):
@@ -85,13 +86,26 @@ def test_invalid_header_is_rejected(s3_client, fake_doris_conn, test_settings):
     assert object_exists(s3_client, "crushftp", f"mediation/rejected/invalid_column_count/{filename}") is True
 
 
-def test_invalid_row_field_count_is_rejected(s3_client, fake_doris_conn, test_settings):
+def test_row_with_too_many_fields_is_rejected(s3_client, fake_doris_conn, test_settings):
     filename = "HOL_01_Active_000000005_20260921050000.csv"
-    _put(s3_client, filename, INVALID_ROW_CONTENT)
+    _put(s3_client, filename, TOO_MANY_FIELDS_CONTENT)
 
     summary = run_validate_and_reject(s3_client, fake_doris_conn, test_settings)
 
     assert summary["rejected_invalid_column_count"] == 1
+
+
+def test_row_with_missing_trailing_fields_is_accepted(s3_client, fake_doris_conn, test_settings):
+    """Real files here routinely omit trailing optional columns entirely --
+    a missing trailing field is implicitly empty, not a rejection."""
+    filename = "HOL_01_Active_000000011_20260921050000.csv"
+    _put(s3_client, filename, SHORT_ROW_CONTENT)
+
+    summary = run_validate_and_reject(s3_client, fake_doris_conn, test_settings)
+
+    assert summary["files_validated"] == 1
+    assert summary["files_rejected"] == 0
+    assert object_exists(s3_client, "crushftp", f"mediation/validated/{filename}") is True
 
 
 def test_duplicate_content_is_rejected_on_second_run(s3_client, fake_doris_conn, test_settings):

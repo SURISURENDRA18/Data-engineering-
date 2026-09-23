@@ -6,6 +6,7 @@ module stays a pure "given file bytes, produce rows" transformer that
 either succeeds or raises.
 """
 
+import csv
 import io
 from datetime import datetime, timezone
 from typing import List, Tuple
@@ -13,11 +14,12 @@ from typing import List, Tuple
 import pandas as pd
 
 from src.clients.doris_client import executemany_write, render_sql, run_ddl_script
-from src.config.actives_schema import COLUMN_DB_MAP, CSV_DELIMITER, RAW_TABLE_DATA_COLUMNS, RowRejectReason
+from src.config.actives_schema import COLUMN_DB_MAP, CSV_DELIMITER, EXPECTED_COLUMNS, RAW_TABLE_DATA_COLUMNS, RowRejectReason
 from src.config.settings import Settings
 from src.loaders.rejected_row_loader import insert_rejected_rows
 from src.models.validation_result import RowLoadResult
 from src.validators.file_content_validator import decompress_if_gzip
+from src.validators.row_structure_validator import pad_row
 
 
 def _now() -> datetime:
@@ -33,9 +35,20 @@ def ensure_raw_tables_exist(conn, settings: Settings) -> None:
 
 
 def read_validated_file_as_dataframe(raw_bytes: bytes, filename: str) -> pd.DataFrame:
+    """Parses via csv.reader + explicit padding, not pd.read_csv directly --
+    real files here routinely omit trailing optional columns entirely
+    (missing delimiters, not just empty values), which pandas' own C
+    tokenizer rejects outright. A missing trailing field is treated as
+    implicitly empty, matching check 6's row_structure_validator."""
     content_bytes = decompress_if_gzip(raw_bytes, filename)
     text = content_bytes.decode("utf-8")
-    df = pd.read_csv(io.StringIO(text), sep=CSV_DELIMITER, dtype=str, keep_default_na=False)
+
+    reader = csv.reader(io.StringIO(text), delimiter=CSV_DELIMITER)
+    next(reader, None)  # header already validated by check 5, not re-read here
+    expected_count = len(EXPECTED_COLUMNS)
+    rows = [pad_row(row, expected_count) for row in reader if row]
+
+    df = pd.DataFrame(rows, columns=EXPECTED_COLUMNS, dtype=str)
     df = df.rename(columns=COLUMN_DB_MAP)
     return df[RAW_TABLE_DATA_COLUMNS]
 
