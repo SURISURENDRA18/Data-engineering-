@@ -56,7 +56,8 @@ For each in-scope file, validates against, in order:
 3. has at least one data row below the header
 4. text readability (not binary/corrupted)
 5. 46-column header schema, exact order
-6. every row's field count matches the header
+6. no row has more fields than the header (a missing trailing field is
+   padded as empty, not treated as a rejection)
 7. duplicate detection (content checksum)
 8. per-region sequence validation
 
