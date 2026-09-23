@@ -9,7 +9,7 @@ import pymysql
 import requests
 from requests.auth import HTTPBasicAuth
 
-from actives_ingestion.config import DorisConfig, pipeline_config
+from actives_ingestion.config import DorisConfig, get_airflow_connection_details, pipeline_config
 from actives_ingestion.utils import chunk_list, get_logger
 
 logger = get_logger("doris_client")
@@ -31,11 +31,21 @@ class DorisClient:
         if self._connection:
             return self._connection
         try:
+            connection = get_airflow_connection_details("doris_default")
+            host = self.config.host
+            port = self.config.port
+            user = self.config.user
+            password = self.config.password
+            if connection:
+                host = str(connection["host"])
+                port = int(connection["port"] or port)
+                user = str(connection["login"])
+                password = str(connection["password"])
             return pymysql.connect(
-                host=self.config.host,
-                port=self.config.port,
-                user=self.config.user,
-                password=self.config.password,
+                host=host,
+                port=port,
+                user=user,
+                password=password,
                 connect_timeout=self.config.connect_timeout,
                 cursorclass=pymysql.cursors.DictCursor,
                 autocommit=True,

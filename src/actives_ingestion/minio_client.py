@@ -7,7 +7,7 @@ from minio import Minio
 from minio.commonconfig import CopySource
 from minio.error import S3Error
 
-from actives_ingestion.config import MinioConfig, pipeline_config
+from actives_ingestion.config import MinioConfig, get_airflow_connection_details, pipeline_config
 from actives_ingestion.utils import get_logger
 
 logger = get_logger("minio_client")
@@ -29,11 +29,22 @@ class MinioService:
     def _get_client(self) -> Minio:
         """Instantiate Minio client if not provided."""
         if self._client is None:
+            connection = get_airflow_connection_details("minio_default")
+            endpoint = self.config.endpoint
+            access_key = self.config.access_key
+            secret_key = self.config.secret_key
+            secure = self.config.secure
+            if connection:
+                endpoint = str(connection["endpoint"])
+                access_key = str(connection["login"])
+                secret_key = str(connection["password"])
+                extra = connection.get("extra") or {}
+                secure = bool(extra.get("secure", secure))
             self._client = Minio(
-                endpoint=self.config.endpoint,
-                access_key=self.config.access_key,
-                secret_key=self.config.secret_key,
-                secure=self.config.secure,
+                endpoint=endpoint,
+                access_key=access_key,
+                secret_key=secret_key,
+                secure=secure,
             )
         return self._client
 

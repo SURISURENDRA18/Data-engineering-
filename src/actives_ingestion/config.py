@@ -63,3 +63,31 @@ class PipelineConfig:
 
 
 pipeline_config = PipelineConfig()
+
+
+def get_airflow_connection_details(conn_id: str) -> dict[str, object] | None:
+    """Return non-secret connection fields from Airflow when running there.
+
+    Airflow Connections are preferred in deployed tasks; environment variables
+    remain the fallback for local execution and tests.
+    """
+    try:
+        from airflow.hooks.base import BaseHook
+
+        conn = BaseHook.get_connection(conn_id)
+        if not conn.host:
+            return None
+        endpoint = conn.host
+        if conn.port:
+            endpoint = f"{endpoint}:{conn.port}"
+        return {
+            "endpoint": endpoint,
+            "host": conn.host,
+            "port": conn.port,
+            "login": conn.login or "",
+            "password": conn.password or "",
+            "schema": conn.schema or "",
+            "extra": conn.extra_dejson,
+        }
+    except Exception:
+        return None
