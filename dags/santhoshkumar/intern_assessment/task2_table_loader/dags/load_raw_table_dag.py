@@ -88,7 +88,7 @@ with DAG(
     dag_id="task2_load_raw_table",
     default_args=default_args,
     description="Loads validated actives records into Apache Doris raw table",
-    schedule_interval=None,
+    schedule=None,
     start_date=datetime(2026, 1, 1),
     catchup=False,
     tags=["task2", "raw_loader", "doris"],
