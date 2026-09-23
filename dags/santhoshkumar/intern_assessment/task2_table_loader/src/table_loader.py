@@ -21,9 +21,26 @@ class RawTableLoader:
 
     def is_file_processed(self, file_name: str) -> bool:
         """Enforces idempotency by checking if the file already exists in the audit table."""
+        create_audit_sql = f"""
+        CREATE TABLE IF NOT EXISTS {self.config.audit_table} (
+            file_name VARCHAR(255) NOT NULL,
+            load_timestamp DATETIME NOT NULL,
+            records_loaded INT DEFAULT 0,
+            records_rejected INT DEFAULT 0,
+            status VARCHAR(50) NOT NULL
+        )
+        UNIQUE KEY(file_name)
+        DISTRIBUTED BY HASH(file_name) BUCKETS 1
+        PROPERTIES (
+            "replication_num" = "1"
+        );
+        """
+        self.doris_hook.run(create_audit_sql)
+
         # Check audit log for matching filename entry
         sql = f"SELECT 1 FROM {self.config.audit_table} WHERE file_name = %s LIMIT 1;"
-        records = self.doris_hook.get_records(sql, parameters=[file_name])
+        records = self.doris_hook.get_records(sql, parameters=(file_name,))
+        return bool(records)
 
         # Return True if a prior run registered this file
         return len(records) > 0
