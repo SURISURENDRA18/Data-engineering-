@@ -39,6 +39,9 @@ def run_load_raw_table(**context):
     )
     loader = RawTableLoader(config=config)
 
+    # Initialize and verify tables once before starting the file processing loop
+    loader.create_tables_if_not_exist()
+
     # List all files under the validated prefix
     file_keys = storage.list_files(prefix=config.source_prefix)
     if not file_keys:
