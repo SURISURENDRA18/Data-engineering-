@@ -71,6 +71,7 @@ class RawTableLoader:
             "replication_num" = "1"
         );
         """
+        self.doris_hook.run(f"DROP TABLE IF EXISTS {self.config.target_table};")
         self.doris_hook.run(create_target_sql)
 
         # 4. Check audit log for matching filename entry
