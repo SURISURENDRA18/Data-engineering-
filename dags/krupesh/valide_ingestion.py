@@ -10,7 +10,7 @@ import io
 with DAG(
     dag_id="krupesh_validate_ingestion",
     start_date=datetime(2026, 1, 1),
-    schedule_interval=None,
+    schedule=None,
     catchup=False
 ) as dag:
 
