@@ -133,11 +133,22 @@ with DAG(
                     
                     if failure_reason is None:
                         expected_field_count = len(actual_headers)
-                        for row in lines[1:]:
+                        
+                        # Added enumerate so we know exactly which line number fails
+                        for line_num, row in enumerate(lines[1:], start=2):
                             if not row.strip():
                                 continue
-                            if len(row.strip().split(';')) != expected_field_count:
+                                
+                            row_columns = row.strip().split(';')
+                            
+                            if len(row_columns) != expected_field_count:
                                 failure_reason = "invalid_column_count"
+                                
+                                # THE DETECTIVE REPORT FOR ROWS:
+                                print(f"--- BAD ROW IN {file_name} ---")
+                                print(f"Line number {line_num} has {len(row_columns)} columns, but we need {expected_field_count}.")
+                                # Print the first 100 characters of the bad row so we can see what's wrong
+                                print(f"Look at the data: {row.strip()[:100]}...")
                                 break
                                 
                 except Exception as e:
