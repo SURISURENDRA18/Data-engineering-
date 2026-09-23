@@ -14,7 +14,7 @@ class PipelineConfig:
     # Save results into your own subfolder
     VALIDATED_PREFIX: str = "mediation/santhosh/validated/"
     REJECTED_PREFIX: str = "mediation/santhosh/rejected/"
-
+    AUDIT_PREFIX: str = "mediation/santhosh/audit/"
 
 DELIMITER = ";"
 

@@ -1,5 +1,8 @@
 from collections import defaultdict
+import csv
 from datetime import datetime, timedelta
+import io
+import json
 import logging
 from pathlib import Path
 import sys
@@ -57,6 +60,8 @@ def validate_and_route_landing_files():
         logger.info("No files found in landing directory: %s", config.LANDING_PREFIX)
         return
 
+    audit_summary_records = []
+
     for key in sorted(all_landing_keys):
         filename = key.split("/")[-1]
 
@@ -86,10 +91,21 @@ def validate_and_route_landing_files():
 
             parsed = FileValidator.parse_filename(filename)
             if parsed:
-                region, _, _, seq_num, _ = parsed
-                region_sequences[region].append(seq_num)
+                reg, _, _, seq_num, _ = parsed
+                region_sequences[reg].append(seq_num)
+
+            # Record clean passed file in summary
+            audit_summary_records.append({
+                "Active File Name": filename,
+                "Status": "PASSED",
+                "Total Scanned Rows": "ALL",
+                "Valid Rows Retained": "ALL",
+                "Dropped Rows": 0,
+                "Observed Field Count": len(config.EXPECTED_HEADERS) if hasattr(config, "EXPECTED_HEADERS") else 46,
+                "Reason": "N/A"
+            })
         else:
-            # 1. Move original file to rejected for strict spec compliance
+            # 1. Move original file to rejected
             storage.move_to_rejected(
                 source_key=key,
                 rejected_prefix=config.REJECTED_PREFIX,
@@ -100,7 +116,7 @@ def validate_and_route_landing_files():
                 "REJECTED file %s. Reason: %s", filename, reject_reason
             )
 
-            # 2. Hybrid Resilient Filtering: Audit and clean rows if failure was invalid_column_count
+            # 2. Resilient Row Filtering if invalid_column_count
             if reject_reason == "invalid_column_count":
                 cleaned_bytes, audit_json, val_cnt, drop_cnt = (
                     FileValidator.extract_valid_rows_and_audit(
@@ -108,16 +124,16 @@ def validate_and_route_landing_files():
                     )
                 )
 
-                # Store audit manifest in rejected folder
+                # Store per-file JSON manifest in rejected folder
                 audit_key = f"{config.REJECTED_PREFIX}invalid_column_count/audit_{filename}.json"
                 storage.upload_bytes(
                     dest_key=audit_key,
                     data=audit_json.encode("utf-8"),
                 )
 
-                # If any rows had valid 46 columns, store sanitized copy in staging/cleaned/
+                # Route cleaned valid rows directly to validated/
                 if cleaned_bytes and val_cnt > 0:
-                    cleaned_key = f"mediation/santhosh/staging/cleaned/{filename}"
+                    cleaned_key = f"{config.VALIDATED_PREFIX.rstrip('/')}/{filename}"
                     storage.upload_bytes(
                         dest_key=cleaned_key,
                         data=cleaned_bytes,
@@ -129,7 +145,55 @@ def validate_and_route_landing_files():
                         drop_cnt,
                     )
 
+                manifest_data = json.loads(audit_json)
+                sample = manifest_data.get("dropped_details_sample", [])
+                observed_cols = sample[0].get("field_count", "N/A") if sample else "N/A"
+
+                audit_summary_records.append({
+                    "Active File Name": filename,
+                    "Status": "REJECTED_WITH_RESILIENCE",
+                    "Total Scanned Rows": manifest_data.get("total_scanned_rows", val_cnt + drop_cnt),
+                    "Valid Rows Retained": val_cnt,
+                    "Dropped Rows": drop_cnt,
+                    "Observed Field Count": observed_cols,
+                    "Reason": reject_reason
+                })
+            else:
+                audit_summary_records.append({
+                    "Active File Name": filename,
+                    "Status": "REJECTED",
+                    "Total Scanned Rows": 0,
+                    "Valid Rows Retained": 0,
+                    "Dropped Rows": 0,
+                    "Observed Field Count": "N/A",
+                    "Reason": reject_reason
+                })
+
         processed_filenames.add(filename)
+
+    # 3. Generate tabular audit_summary.csv and upload to crushftp/mediation/santhosh/audit/
+    if audit_summary_records:
+        csv_buffer = io.StringIO()
+        fieldnames = [
+            "Active File Name",
+            "Status",
+            "Total Scanned Rows",
+            "Valid Rows Retained",
+            "Dropped Rows",
+            "Observed Field Count",
+            "Reason"
+        ]
+        writer = csv.DictWriter(csv_buffer, fieldnames=fieldnames)
+        writer.writeheader()
+        for rec in audit_summary_records:
+            writer.writerow(rec)
+
+        audit_target_key = f"{getattr(config, 'AUDIT_PREFIX', 'mediation/santhosh/audit/').rstrip('/')}/audit_summary.csv"
+        storage.upload_bytes(
+            dest_key=audit_target_key,
+            data=csv_buffer.getvalue().encode("utf-8"),
+        )
+        logger.info("Uploaded tabular audit summary to: %s", audit_target_key)
 
 
 with DAG(
