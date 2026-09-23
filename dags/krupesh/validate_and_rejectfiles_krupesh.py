@@ -129,7 +129,8 @@ with DAG(
                                 failure_reason = "invalid_column_count"
                                 break
                                 
-                except Exception:
+                except Exception as e:
+                    print(f"CRASH REPORT for {file_name}: {e}")
                     failure_reason = "not_text_format"
 
             # RULE 7: Duplicate
