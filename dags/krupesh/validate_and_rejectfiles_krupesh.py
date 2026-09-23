@@ -101,7 +101,15 @@ with DAG(
             # RULES 4, 3, 5, 6
             if failure_reason is None:
                 try:
-                    file_text = s3.read_key(key=full_cloud_path, bucket_name=bucket)
+                    file_obj = s3.get_key(key=full_cloud_path, bucket_name=bucket)
+                    raw_bytes = file_obj.get()['Body'].read()
+                    
+                    # 2. Check if it's zipped. If yes, unzip it in memory!
+                    if file_name.endswith(".gz"):
+                        file_text = gzip.decompress(raw_bytes).decode("utf-8-sig")
+                    else:
+                        file_text = raw_bytes.decode("utf-8-sig")
+                        
                     lines = file_text.splitlines()
                     
                     if len(lines) < 2:
