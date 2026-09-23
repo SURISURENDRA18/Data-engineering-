@@ -117,7 +117,7 @@ with DAG(
                         failure_reason = "header_only"
                     
                     if failure_reason is None:
-                        actual_headers = lines[0].strip().split(';')
+                        actual_headers = [col.strip().strip('"') for col in lines[0].strip().split(';')]
                         if len(actual_headers) < 9 or actual_headers != expected_headers:
                             failure_reason = "invalid_column_count"
                             print(f"--- HEADER MISMATCH IN {file_name} ---")
