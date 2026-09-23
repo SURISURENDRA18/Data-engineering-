@@ -58,16 +58,16 @@ with DAG(
         # -----------------------------------------------------
         
         expected_headers = [
-            "CompanyID", "CompanyName", "Invoice Number", "BusinessUnitName", "DepartmentName",
-            "CostCenterName", "Commercial OfferName", "BusinessUnitLevel", "Business Unit TAG",
-            "Shared Balance Used", "AccountNumber", "CustomerNumber", "MSISDN", "ProductStatus",
-            "ProvProductType", "Activation Date", "LastProductStatusChangeDate",
-            "Commercial OfferDescription", "Last TrafficDate", "ProductID", "ICCID",
-            "ExtraMSISDN_1", "ExtraCreation Date_1", "ExtraMSISDN_2", "ExtraCreationDate_2",
-            "ExtraMSISDN_3", "ExtraCreationDate_3", "ExtraMSISDN 4", "ExtraCreationDate_4",
-            "PlanName", "PlanStartDate", "Carrier_Name", "CDP Platform", "Carrier_AccountNo",
+            "CompanyID", "CompanyName", "InvoiceNumber", "BusinessUnitName", "DepartmentName",
+            "CostCenterName", "CommercialOfferName", "BusinessUnitLevel", "BusinessUnitTAG",
+            "SharedBalanceUsed", "AccountNumber", "CustomerNumber", "MSISDN", "ProductStatus",
+            "ProvProductType", "ActivationDate", "LastProductStatusChangeDate",
+            "CommercialOfferDescription", "LastTrafficDate", "ProductID", "ICCID",
+            "ExtraMSISDN_1", "ExtraCreationDate_1", "ExtraMSISDN_2", "ExtraCreationDate_2",
+            "ExtraMSISDN_3", "ExtraCreationDate_3", "ExtraMSISDN_4", "ExtraCreationDate_4",
+            "PlanName", "PlanStartDate", "Carrier_Name", "CDP_Platform", "Carrier_AccountNo",
             "ProviderName", "Type", "Profile_version", "Rate_Plan_Name", "Rate_Plan_Code_ID",
-            "Zone_Type", "Whitelisted Zones", "Blacklisted_Zones", "SIM_Batch", "SIM_Vendor",
+            "Zone_Type", "Whitelisted_Zones", "Blacklisted_Zones", "SIM_Batch", "SIM_Vendor",
             "Sim_Type", "EID"
         ]
 
@@ -117,19 +117,10 @@ with DAG(
                         failure_reason = "header_only"
                     
                     if failure_reason is None:
-                        actual_headers = [col.strip().strip('"') for col in lines[0].strip().split(';')]
+                        actual_headers = lines[0].strip().split(';')
                         if len(actual_headers) < 9 or actual_headers != expected_headers:
                             failure_reason = "invalid_column_count"
-                            print(f"--- HEADER MISMATCH IN {file_name} ---")
-                            print(f"File has {len(actual_headers)} columns, we expect {len(expected_headers)}")
                             
-                            # If the counts are the same, let's find the exact typo
-                            if len(actual_headers) == len(expected_headers):
-                                for i in range(len(actual_headers)):
-                                    if actual_headers[i] != expected_headers[i]:
-                                        print(f"Mistake at Column {i}:")
-                                        print(f"   File has: '{actual_headers[i]}'")
-                                        print(f"   We expect: '{expected_headers[i]}'")
                     
                     if failure_reason is None:
                         expected_field_count = len(actual_headers)
