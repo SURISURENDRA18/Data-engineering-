@@ -24,9 +24,9 @@ class Settings:
     doris_conn_id: str = "doris_default"
 
     bucket: str = "crushftp"
-    landing_prefix: str = "mediation/landing/"
-    validated_prefix: str = "mediation/validated/"
-    rejected_prefix: str = "mediation/rejected/"
+    landing_prefix: str = "mediation/landing/"  # shared source -- every candidate's pipeline reads from here
+    validated_prefix: str = "mediation/ganesh/validated/"  # own output namespace, matching peers' convention
+    rejected_prefix: str = "mediation/ganesh/rejected/"
 
     doris_database: str = "database_ganesh"
     raw_table: str = "raw_actives_daily"

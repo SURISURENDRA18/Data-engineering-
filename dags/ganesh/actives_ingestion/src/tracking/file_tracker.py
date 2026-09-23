@@ -44,10 +44,12 @@ def _upsert(conn, settings: Settings, values: tuple) -> None:
 
 
 def record_validation_result(conn, settings: Settings, report: FileValidationReport) -> None:
-    """Writes the tracking row for a just-validated/rejected file. Must be
-    called *before* the corresponding MinIO move, so a crash in between
-    leaves a resumable, non-ambiguous state (see raw_load_pipeline / file
-    tracker interplay in the README idempotency section)."""
+    """Writes the tracking row for a just-validated/rejected file. Called
+    *before* the corresponding MinIO copy (route_file), so a crash in
+    between leaves a resumable, non-ambiguous state: the original in
+    landing/ is untouched either way (copying is non-destructive), and a
+    rerun's filename-based skip (list_processed_filenames) or this row's
+    presence both correctly identify the file as already handled."""
     now = _now()
     is_valid = report.is_valid
     values = (

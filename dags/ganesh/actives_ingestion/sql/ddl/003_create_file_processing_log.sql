@@ -7,7 +7,9 @@ CREATE TABLE IF NOT EXISTS ${DORIS_DATABASE}.file_processing_log (
     file_name                      VARCHAR(255) NOT NULL,
     region                         VARCHAR(50),
     sequence_number                INT,
+    -- original landing/ key; stays valid forever, never deleted
     landing_key                    VARCHAR(1000),
+    -- validated/ or rejected/<reason>/ key this content was copied to
     current_key                    VARCHAR(1000),
     validation_status              VARCHAR(20),
     rejection_reason               VARCHAR(50),

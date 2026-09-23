@@ -1,12 +1,16 @@
 """Actives feed ingestion DAG (Data Engineering Intern Assessment).
 
-SOURCE: MinIO crushftp/mediation/landing/
-STAGE 1 (validate_and_reject): validate each file against the 8 file-level
-    checks in src/pipeline/file_validation_pipeline.py; move to validated/
-    or rejected/<reason>/.
-STAGE 2 (load_raw_table): load validated/ files into Doris raw_actives_daily
-    via src/pipeline/raw_load_pipeline.py, with row-level rejection,
-    dedup, and idempotent per-file loading.
+SOURCE: MinIO crushftp/mediation/landing/ (shared -- every candidate's
+    pipeline in this environment reads from the same source)
+STAGE 1 (validate_and_reject): validate each Active-named file against the
+    8 file-level checks in src/pipeline/file_validation_pipeline.py; copy
+    (never delete the original) to mediation/ganesh/validated/ or
+    mediation/ganesh/rejected/<reason>/. Files not named "Active"/"Actives"
+    are ignored entirely -- they belong to other feeds/candidates sharing
+    this landing zone.
+STAGE 2 (load_raw_table): load mediation/ganesh/validated/ files into
+    Doris raw_actives_daily via src/pipeline/raw_load_pipeline.py, with
+    row-level rejection, dedup, and idempotent per-file loading.
 
 This file is intentionally thin -- orchestration only. All filename/CSV/
 SQL/validation/dedup logic lives in src/. See README.md for the full
@@ -33,16 +37,20 @@ from src.pipeline.file_validation_pipeline import run_validate_and_reject  # noq
 from src.pipeline.raw_load_pipeline import run_raw_load  # noqa: E402
 
 DAG_DESCRIPTION = (
-    "Ingests the daily Actives SIM feed from MinIO (crushftp/mediation/landing/). "
-    "Validates incoming files against filename, schema, format, duplicate, and "
-    "sequence rules; moves invalid files to reason-specific rejected/<reason>/ "
-    "paths; and loads validated records into the Doris raw_actives_daily table "
-    "with row-level validation, deduplication, metadata, and idempotent "
-    "per-file processing."
+    "Ingests the daily Actives SIM feed from the shared MinIO landing zone "
+    "(crushftp/mediation/landing/). Validates Active-named files against "
+    "filename, schema, format, duplicate, and sequence rules; copies (never "
+    "deletes the original -- landing/ is shared with other candidates) "
+    "invalid files to reason-specific mediation/ganesh/rejected/<reason>/ "
+    "paths; and loads validated records into the Doris raw_actives_daily "
+    "table with row-level validation, deduplication, metadata, and "
+    "idempotent per-file processing."
 )
 
 VALIDATE_DOC = """\
-Validates each file in the MinIO landing path against, in order:
+Only looks at filenames containing "Active" -- everything else in the
+shared landing/ zone (other feeds, other candidates) is left untouched.
+For each in-scope file, validates against, in order:
 1. filename pattern
 2. file size > 0
 3. has at least one data row below the header
@@ -52,15 +60,18 @@ Validates each file in the MinIO landing path against, in order:
 7. duplicate detection (content checksum)
 8. per-region sequence validation
 
-Valid files move to `validated/`. Invalid files move to
-`rejected/<reason>/`. One bad file cannot stop the batch -- check this
-task's logs for a per-file decision line (FILE_VALIDATED / FILE_REJECTED)
-and a run summary block.
+Valid files are **copied** (never removed from landing/) to
+`mediation/ganesh/validated/`. Invalid files are copied to
+`mediation/ganesh/rejected/<reason>/`. Idempotency is filename-based
+(already-routed files are skipped), not based on the file's absence from
+landing/. One bad file cannot stop the batch -- check this task's logs
+for a per-file decision line (FILE_VALIDATED / FILE_REJECTED) and a run
+summary block.
 """
 
 LOAD_DOC = """\
-Reads files from `validated/`, applies row-level rejection rules
-(NULL_OR_EMPTY_ICCID, NULL_OR_EMPTY_CUSTOMER_NUMBER,
+Reads files from `mediation/ganesh/validated/`, applies row-level
+rejection rules (NULL_OR_EMPTY_ICCID, NULL_OR_EMPTY_CUSTOMER_NUMBER,
 NULL_OR_ZERO_COMPANY_ID), deduplicates on iccid (keep last occurrence),
 and loads the result into Doris `raw_actives_daily`. Rejected rows go to
 `raw_actives_daily_rejected`. Files already loaded (by content checksum)
