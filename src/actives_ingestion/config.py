@@ -72,10 +72,13 @@ def get_airflow_connection_details(conn_id: str) -> dict[str, object] | None:
     remain the fallback for local execution and tests.
     """
     try:
-        from airflow.hooks.base import BaseHook
+        try:
+            from airflow.sdk.bases.hook import BaseHook
+        except ImportError:
+            from airflow.hooks.base import BaseHook
 
         conn = BaseHook.get_connection(conn_id)
-        if not conn.host:
+        if not conn or not conn.host:
             return None
         endpoint = conn.host
         if conn.port:
@@ -87,7 +90,8 @@ def get_airflow_connection_details(conn_id: str) -> dict[str, object] | None:
             "login": conn.login or "",
             "password": conn.password or "",
             "schema": conn.schema or "",
-            "extra": conn.extra_dejson,
+            "extra": conn.extra_dejson if hasattr(conn, "extra_dejson") else {},
         }
     except Exception:
         return None
+

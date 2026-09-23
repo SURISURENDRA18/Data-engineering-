@@ -13,6 +13,7 @@ import csv
 import gzip
 import io
 import zlib
+from collections.abc import Callable
 
 from actives_ingestion.constants import (
     EXPECTED_COLUMN_COUNT,
@@ -84,7 +85,7 @@ class FileValidator:
     def validate(
         self,
         filename: str,
-        content_stream: io.BufferedIOBase,
+        content_stream: io.BufferedIOBase | Callable[[], io.BufferedIOBase] | None,
         file_size: int,
     ) -> ValidationResult:
         """Run all 8 validation checks in exact required order:
@@ -109,19 +110,27 @@ class FileValidator:
         if file_size <= 0:
             return ValidationResult.failure(REASON_ZERO_SIZE, metadata=metadata)
 
+        # Resolve stream lazily if passed as a callable getter
+        resolved_stream: io.BufferedIOBase | None = (
+            content_stream() if callable(content_stream) else content_stream
+        )
+        if resolved_stream is None:
+            return ValidationResult.failure(REASON_ZERO_SIZE, metadata=metadata)
+
         # Compute SHA-256 hash for file identity
-        file_hash = calculate_sha256(content_stream)
+        file_hash = calculate_sha256(resolved_stream)
         metadata.file_hash = file_hash
 
         # Check 3: determine whether at least one data record exists before
         # running the full text/format/schema validation in Check 4.
-        has_data_row = self._has_data_row(content_stream, metadata.is_gzipped)
+        has_data_row = self._has_data_row(resolved_stream, metadata.is_gzipped)
         if has_data_row is False:
             return ValidationResult.failure(REASON_HEADER_ONLY, metadata=metadata, file_hash=file_hash)
 
         # Check 4: verify text/gzip format.
-        text_stream, is_text_format = self._open_text_stream(content_stream, metadata.is_gzipped)
+        text_stream, is_text_format = self._open_text_stream(resolved_stream, metadata.is_gzipped)
         if not is_text_format or text_stream is None:
+
             return ValidationResult.failure(REASON_NOT_TEXT_FORMAT, metadata=metadata, file_hash=file_hash)
 
         try:
@@ -164,8 +173,8 @@ class FileValidator:
         except (UnicodeDecodeError, csv.Error, gzip.BadGzipFile, zlib.error, EOFError, ValueError):
             return ValidationResult.failure(REASON_NOT_TEXT_FORMAT, metadata=metadata, file_hash=file_hash)
 
-        if content_stream.seekable():
-            content_stream.seek(0)
+        if resolved_stream and resolved_stream.seekable():
+            resolved_stream.seek(0)
 
         # Check 7: Duplicate detection (in-batch and persistent database)
         if file_hash in self.seen_hashes:

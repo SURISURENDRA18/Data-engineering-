@@ -61,6 +61,7 @@ default_args = {
     "email_on_retry": False,
     "retries": 2,
     "retry_delay": timedelta(minutes=5),
+    "execution_timeout": timedelta(minutes=30),
 }
 
 try:
@@ -84,14 +85,18 @@ try:
         validate_and_reject = PythonOperator(
             task_id="validate_and_reject",
             python_callable=task_validate_and_reject,
+            execution_timeout=timedelta(minutes=30),
         )
 
         load_raw_table = PythonOperator(
             task_id="load_raw_table",
             python_callable=task_load_raw_table,
+            trigger_rule="all_success",
+            execution_timeout=timedelta(minutes=30),
         )
 
         validate_and_reject >> load_raw_table
+
 
 except ImportError:
     dag = None
