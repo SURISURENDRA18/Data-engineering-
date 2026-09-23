@@ -89,6 +89,7 @@ def validate_and_route_landing_files():
                 region, _, _, seq_num, _ = parsed
                 region_sequences[region].append(seq_num)
         else:
+            # 1. Move original file to rejected for strict spec compliance
             storage.move_to_rejected(
                 source_key=key,
                 rejected_prefix=config.REJECTED_PREFIX,
@@ -98,6 +99,35 @@ def validate_and_route_landing_files():
             logger.warning(
                 "REJECTED file %s. Reason: %s", filename, reject_reason
             )
+
+            # 2. Hybrid Resilient Filtering: Audit and clean rows if failure was invalid_column_count
+            if reject_reason == "invalid_column_count":
+                cleaned_bytes, audit_json, val_cnt, drop_cnt = (
+                    FileValidator.extract_valid_rows_and_audit(
+                        filename=filename, raw_bytes=raw_bytes
+                    )
+                )
+
+                # Store audit manifest in rejected folder
+                audit_key = f"{config.REJECTED_PREFIX}invalid_column_count/audit_{filename}.json"
+                storage.upload_bytes(
+                    dest_key=audit_key,
+                    data=audit_json.encode("utf-8"),
+                )
+
+                # If any rows had valid 46 columns, store sanitized copy in staging/cleaned/
+                if cleaned_bytes and val_cnt > 0:
+                    cleaned_key = f"mediation/santhosh/staging/cleaned/{filename}"
+                    storage.upload_bytes(
+                        dest_key=cleaned_key,
+                        data=cleaned_bytes,
+                    )
+                    logger.info(
+                        "Resilience: Retained %d clean rows in %s (quarantined %d bad rows)",
+                        val_cnt,
+                        cleaned_key,
+                        drop_cnt,
+                    )
 
         processed_filenames.add(filename)
 

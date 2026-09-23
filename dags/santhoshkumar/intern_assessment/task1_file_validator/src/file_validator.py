@@ -1,12 +1,13 @@
 import gzip
 import io
+import json
+import logging
 import re
 from typing import Dict, List, Optional, Set, Tuple
 
-try:
-    from src.config import DELIMITER, EXPECTED_HEADERS, FILENAME_PATTERN
-except ModuleNotFoundError:
-    from task1_file_validator.src.config import DELIMITER, EXPECTED_HEADERS, FILENAME_PATTERN
+from src.config import DELIMITER, EXPECTED_HEADERS, FILENAME_PATTERN
+
+logger = logging.getLogger(__name__)
 
 
 class FileValidator:
@@ -16,7 +17,6 @@ class FileValidator:
 
     @classmethod
     def parse_filename(cls, filename: str) -> Optional[Tuple[str, str, str, int, str]]:
-        """Extracts (region, instance, feed_type, sequence_no, timestamp)."""
         match = cls.FILENAME_REGEX.match(filename)
         if not match:
             return None
@@ -25,13 +25,12 @@ class FileValidator:
 
     @staticmethod
     def _get_text_stream(raw_bytes: bytes, filename: str) -> Optional[io.StringIO]:
-        """Safely decompresses and decodes bytes into a text stream."""
         try:
             if filename.endswith(".gz"):
                 decompressed = gzip.decompress(raw_bytes)
-                text = decompressed.decode("utf-8")
+                text = decompressed.decode("utf-8-sig")
             else:
-                text = raw_bytes.decode("utf-8")
+                text = raw_bytes.decode("utf-8-sig")
 
             if "\x00" in text:
                 return None
@@ -47,11 +46,6 @@ class FileValidator:
         processed_filenames: Set[str],
         region_sequences: Dict[str, List[int]],
     ) -> Tuple[bool, Optional[str]]:
-        """
-        Runs all 8 checks in exact PDF order.
-        Stops at the very first failure.
-        """
-
         # 1. pattern_mismatch
         parsed = cls.parse_filename(filename)
         if not parsed:
@@ -78,13 +72,13 @@ class FileValidator:
 
         # 5. invalid_column_count (Header verification)
         header_line = stream.readline()
-        headers = [col.strip() for col in header_line.rstrip("\r\n").split(cls.DELIMITER)]
+        headers = [col.strip().strip('"') for col in header_line.rstrip("\r\n").split(cls.DELIMITER)]
         if len(headers) < 9 or headers != cls.EXPECTED_HEADERS:
             return False, "invalid_column_count"
 
         # 6. invalid_column_count (Data row verification)
         expected_field_count = len(cls.EXPECTED_HEADERS)
-        for line in stream:
+        for row_idx, line in enumerate(stream, start=2):
             stripped = line.rstrip("\r\n")
             if not stripped:
                 continue
@@ -102,3 +96,60 @@ class FileValidator:
                 return False, "sequence_invalid"
 
         return True, None
+
+    @classmethod
+    def extract_valid_rows_and_audit(
+        cls, filename: str, raw_bytes: bytes
+    ) -> Tuple[Optional[bytes], Optional[str], int, int]:
+        """
+        Extracts valid 46-column rows for business resilience.
+        Returns: (cleaned_bytes, audit_manifest_json, valid_count, dropped_count)
+        """
+        stream = cls._get_text_stream(raw_bytes, filename)
+        if not stream:
+            return None, None, 0, 0
+
+        header_line = stream.readline()
+        cleaned_lines = [header_line.rstrip("\r\n")]
+        expected_field_count = len(cls.EXPECTED_HEADERS)
+
+        dropped_rows = []
+        valid_count = 0
+
+        for row_idx, line in enumerate(stream, start=2):
+            stripped = line.rstrip("\r\n")
+            if not stripped:
+                continue
+            fields = stripped.split(cls.DELIMITER)
+            if len(fields) == expected_field_count:
+                cleaned_lines.append(stripped)
+                valid_count += 1
+            else:
+                dropped_rows.append({
+                    "row_number": row_idx,
+                    "field_count": len(fields),
+                    "expected": expected_field_count,
+                    "reason": "ROW_FIELD_COUNT_MISMATCH"
+                })
+
+        audit_manifest = {
+            "file_name": filename,
+            "total_scanned_rows": valid_count + len(dropped_rows),
+            "valid_rows_retained": valid_count,
+            "dropped_rows_count": len(dropped_rows),
+            "dropped_details_sample": dropped_rows[:50]
+        }
+
+        if valid_count > 0:
+            cleaned_text = "\n".join(cleaned_lines) + "\n"
+            if filename.endswith(".gz"):
+                out_buf = io.BytesIO()
+                with gzip.GzipFile(fileobj=out_buf, mode="wb") as gz:
+                    gz.write(cleaned_text.encode("utf-8"))
+                cleaned_bytes = out_buf.getvalue()
+            else:
+                cleaned_bytes = cleaned_text.encode("utf-8")
+        else:
+            cleaned_bytes = None
+
+        return cleaned_bytes, json.dumps(audit_manifest, indent=2), valid_count, len(dropped_rows)
