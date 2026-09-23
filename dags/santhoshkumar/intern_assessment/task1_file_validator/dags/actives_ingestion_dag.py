@@ -82,12 +82,13 @@ def validate_and_route_landing_files():
         )
 
         if is_valid:
-            storage.move_to_validated(
-                source_key=key,
-                validated_prefix=config.VALIDATED_PREFIX,
-                filename=filename,
+            # Save validated file directly using in-memory bytes
+            validated_dest_key = f"{config.VALIDATED_PREFIX.rstrip('/')}/{filename}"
+            storage.upload_bytes(
+                dest_key=validated_dest_key,
+                data=raw_bytes,
             )
-            logger.info("PASSED validation: %s", filename)
+            logger.info("PASSED validation and saved: %s", validated_dest_key)
 
             parsed = FileValidator.parse_filename(filename)
             if parsed:
@@ -105,15 +106,14 @@ def validate_and_route_landing_files():
                 "Reason": "N/A"
             })
         else:
-            # 1. Move original file to rejected
-            storage.move_to_rejected(
-                source_key=key,
-                rejected_prefix=config.REJECTED_PREFIX,
-                reason=reject_reason,
-                filename=filename,
+            # 1. Save original rejected file directly using in-memory bytes
+            rejected_dest_key = f"{config.REJECTED_PREFIX.rstrip('/')}/{reject_reason}/{filename}"
+            storage.upload_bytes(
+                dest_key=rejected_dest_key,
+                data=raw_bytes,
             )
             logger.warning(
-                "REJECTED file %s. Reason: %s", filename, reject_reason
+                "REJECTED file %s. Reason: %s (saved to %s)", filename, reject_reason, rejected_dest_key
             )
 
             # 2. Resilient Row Filtering if invalid_column_count
@@ -125,7 +125,7 @@ def validate_and_route_landing_files():
                 )
 
                 # Store per-file JSON manifest in rejected folder
-                audit_key = f"{config.REJECTED_PREFIX}invalid_column_count/audit_{filename}.json"
+                audit_key = f"{config.REJECTED_PREFIX.rstrip('/')}/invalid_column_count/audit_{filename}.json"
                 storage.upload_bytes(
                     dest_key=audit_key,
                     data=audit_json.encode("utf-8"),
