@@ -6,7 +6,7 @@ import re
 
 # 1. THE DAG MANAGER
 with DAG(
-    dag_id="validate_and_reject",
+    dag_id="krupesh_validate_and_reject",
     start_date=datetime(2026, 1, 1),
     schedule=None,
     catchup=False
@@ -21,9 +21,40 @@ with DAG(
         bucket = "crushftp"
         landing_folder = "mediation/landing/"
         
-        # Fake memory for Rules 7 & 8 
-        processed_history = ["HOL_01_Active_000123455_20260920050000.csv"]
-        highest_seq = {"HOL": 123455}
+        # --- REAL MEMORY: BUILD HISTORY FROM CLOUD FOLDERS ---
+        processed_history = []
+        highest_seq = {}
+        
+        # 1. Ask Cloud Claw to list everything currently inside your validated and rejected folders
+        # The 'or []' part is a safety net: if the folder is completely empty, give us an empty list instead of crashing.
+        validated_files = s3.list_keys(bucket_name=bucket, prefix="mediation/krupesh/validated/") or []
+        rejected_files = s3.list_keys(bucket_name=bucket, prefix="mediation/krupesh/rejected/") or []
+        
+        # 2. Add all these past files to our processed_history list (Rule 7)
+        for full_path in validated_files + rejected_files:
+            past_file = full_path.split('/')[-1]
+            if past_file:
+                processed_history.append(past_file)
+                
+        # 3. Find the highest sequence number from the previously validated files (Rule 8)
+        for full_path in validated_files:
+            past_file = full_path.split('/')[-1]
+            name_parts = past_file.split('_')
+            
+            # Make sure it looks like a valid file before we try to read its sequence number
+            if len(name_parts) >= 5:
+                region = name_parts[0]
+                try:
+                    seq_num = int(name_parts[3])
+                    # If this region is brand new to us, OR if this sequence number is the biggest we've seen, save it!
+                    if region not in highest_seq or seq_num > highest_seq[region]:
+                        highest_seq[region] = seq_num
+                except ValueError:
+                    pass # Ignore it if the sequence wasn't a real number
+                    
+        print(f"Memory loaded! Found {len(processed_history)} past files.")
+        print(f"Highest sequences on file: {highest_seq}")
+        # -----------------------------------------------------
         
         expected_headers = [
             "CompanyID", "CompanyName", "Invoice Number", "BusinessUnitName", "DepartmentName",
@@ -39,7 +70,7 @@ with DAG(
             "Sim_Type", "EID"
         ]
 
-        # Get all files in the cloud folder
+        # Get all files in the landing folder
         cloud_files = s3.list_keys(bucket_name=bucket, prefix=landing_folder)
         
         if not cloud_files:
@@ -106,14 +137,12 @@ with DAG(
                 if region in highest_seq and seq_num <= highest_seq[region]:
                     failure_reason = "sequence_invalid"
 
-            # --- UPDATED PATHS FOR KRUPESH ---
+            # --- ROUTING TO KRUPESH FOLDERS ---
             if failure_reason is None:
                 print("Result: PASSED! Moving to validated folder.")
-                # Notice we added /krupesh/ here!
                 destination_path = f"mediation/krupesh/validated/{file_name}"
             else:
                 print(f"Result: FAILED ({failure_reason}). Moving to rejected folder.")
-                # Notice we added /krupesh/ here too!
                 destination_path = f"mediation/krupesh/rejected/{failure_reason}/{file_name}"
 
             # Step A: Copy to new location
@@ -123,8 +152,7 @@ with DAG(
                 source_bucket_name=bucket,
                 dest_bucket_name=bucket
             )
-            # Step B: Delete from landing location
-            #s3.delete_object(bucket_name=bucket, key=full_cloud_path)
+           
 
         print("\nAll files processed successfully!")
 
