@@ -5,6 +5,7 @@ and log retrieval via the Airflow 3 REST API (/api/v2) with OAuth2/JWT Bearer To
 """
 
 import socket
+from datetime import datetime, timezone
 from typing import Any, Optional
 
 import requests
@@ -193,7 +194,10 @@ class AirflowClient:
     def trigger_dag(self, dag_id: str, conf: Optional[dict] = None) -> dict[str, Any]:
         """Trigger a DAG run on the remote Airflow instance (manual invocation only)."""
         url = f"{self.config.api_url.rstrip('/')}/dags/{dag_id}/dagRuns"
-        payload: dict[str, Any] = {"conf": conf or {}}
+        payload: dict[str, Any] = {
+            "logical_date": datetime.now(timezone.utc).isoformat(),
+            "conf": conf or {},
+        }
         try:
             resp = self._request("POST", url, json=payload)
             if resp.status_code in (200, 201):
