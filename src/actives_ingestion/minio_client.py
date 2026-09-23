@@ -5,6 +5,7 @@ import os
 
 from minio import Minio
 from minio.commonconfig import CopySource
+from minio.error import S3Error
 
 from actives_ingestion.config import MinioConfig, pipeline_config
 from actives_ingestion.utils import get_logger
@@ -44,6 +45,18 @@ class MinioService:
             client = self._get_client()
             if not client.bucket_exists(self.config.bucket):
                 client.make_bucket(self.config.bucket)
+        except S3Error as e:
+            # Existing production buckets may intentionally deny
+            # GetBucketLocation/HEAD while still allowing object listing and
+            # reads. Bucket creation is not part of a pipeline run.
+            if e.code in {"AccessDenied", "AllAccessDisabled"}:
+                logger.warning(
+                    "Bucket verification is not permitted for '%s'; continuing and validating access by object listing.",
+                    self.config.bucket,
+                )
+                return
+            logger.error("Could not verify or create bucket %s: %s", self.config.bucket, e)
+            raise
         except Exception as e:
             logger.error("Could not verify or create bucket %s: %s", self.config.bucket, e)
             raise
