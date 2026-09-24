@@ -10,16 +10,23 @@ import sys
 from airflow import DAG
 from airflow.operators.python import PythonOperator
 
-# Ensure Python resolves 'src' from the parent folder (task1_file_validator)
-current_dir = Path(__file__).resolve().parent
-parent_dir = current_dir.parent
+# Ensure Python resolves both task directories cleanly
+CURRENT_DIR = Path(__file__).resolve().parent
+PARENT_DIR = CURRENT_DIR.parent
+ASSESSMENT_ROOT = PARENT_DIR.parent
 
-if str(parent_dir) not in sys.path:
-    sys.path.insert(0, str(parent_dir))
+for p in [str(PARENT_DIR), str(ASSESSMENT_ROOT / "task2_table_loader")]:
+    if p not in sys.path:
+        sys.path.insert(0, p)
 
 from src.config import PipelineConfig
 from src.file_validator import FileValidator
 from src.storage import StorageManager
+
+# Task 2 Loader dependencies
+from task2_table_loader.src.config import LoaderConfig
+from task2_table_loader.src.storage import StorageManager as DorisStorageManager
+from task2_table_loader.src.table_loader import RawTableLoader
 
 logger = logging.getLogger(__name__)
 
@@ -33,18 +40,17 @@ default_args = {
 
 
 def validate_and_route_landing_files():
+    """Task 1: Validates landing files and routes to validated or rejected folders."""
     config = PipelineConfig()
     storage = StorageManager(
         conn_id=config.MINIO_CONN_ID, bucket_name=config.BUCKET_NAME
     )
 
-    # 1. Discover already processed files to avoid re-processing the same landing files
     processed_filenames = storage.get_already_processed_filenames(
         validated_prefix=config.VALIDATED_PREFIX,
         rejected_prefix=config.REJECTED_PREFIX,
     )
 
-    # Pre-populate region sequences from previously validated files
     region_sequences = defaultdict(list)
     already_validated_keys = storage.list_files(config.VALIDATED_PREFIX)
     for vkey in already_validated_keys:
@@ -54,7 +60,6 @@ def validate_and_route_landing_files():
             reg, _, _, seq_num, _ = parsed
             region_sequences[reg].append(seq_num)
 
-    # 2. List all objects in landing
     all_landing_keys = storage.list_files(config.LANDING_PREFIX)
     if not all_landing_keys:
         logger.info("No files found in landing directory: %s", config.LANDING_PREFIX)
@@ -65,11 +70,9 @@ def validate_and_route_landing_files():
     for key in sorted(all_landing_keys):
         filename = key.split("/")[-1]
 
-        # Ignore files that do not belong to the Actives feed
         if "Active" not in filename:
             continue
 
-        # Skip files already processed (landing original remains intact)
         if filename in processed_filenames:
             logger.info("File %s already processed previously. Skipping.", filename)
             continue
@@ -86,7 +89,6 @@ def validate_and_route_landing_files():
         )
 
         if is_valid:
-            # Copy valid data to validated prefix without deleting from landing
             validated_dest_key = f"{config.VALIDATED_PREFIX.rstrip('/')}/{filename}"
             storage.upload_bytes(
                 dest_key=validated_dest_key,
@@ -109,7 +111,6 @@ def validate_and_route_landing_files():
                 "Reason": "N/A"
             })
         else:
-            # Save copy of rejected file without deleting original from landing
             rejected_dest_key = f"{config.REJECTED_PREFIX.rstrip('/')}/{reject_reason}/{filename}"
             storage.upload_bytes(
                 dest_key=rejected_dest_key,
@@ -119,7 +120,6 @@ def validate_and_route_landing_files():
                 "REJECTED file %s. Reason: %s (copied to %s)", filename, reject_reason, rejected_dest_key
             )
 
-            # Resilient Row Filtering if invalid_column_count
             if reject_reason == "invalid_column_count":
                 cleaned_bytes, audit_json, val_cnt, drop_cnt = (
                     FileValidator.extract_valid_rows_and_audit(
@@ -127,14 +127,12 @@ def validate_and_route_landing_files():
                     )
                 )
 
-                # Upload JSON manifest to rejected prefix
                 audit_key = f"{config.REJECTED_PREFIX.rstrip('/')}/invalid_column_count/audit_{filename}.json"
                 storage.upload_bytes(
                     dest_key=audit_key,
                     data=audit_json.encode("utf-8"),
                 )
 
-                # Route cleaned valid rows directly to validated/
                 if cleaned_bytes and val_cnt > 0:
                     cleaned_key = f"{config.VALIDATED_PREFIX.rstrip('/')}/{filename}"
                     storage.upload_bytes(
@@ -174,7 +172,6 @@ def validate_and_route_landing_files():
 
         processed_filenames.add(filename)
 
-    # 3. Generate tabular audit_summary.csv and upload to crushftp/mediation/santhosh/audit/
     if audit_summary_records:
         csv_buffer = io.StringIO()
         fieldnames = [
@@ -199,16 +196,69 @@ def validate_and_route_landing_files():
         logger.info("Uploaded tabular audit summary to: %s", audit_target_key)
 
 
+def run_load_raw_table(**context):
+    """Task 2: Loads validated records into Apache Doris."""
+    config = LoaderConfig()
+    storage = DorisStorageManager(
+        conn_id=config.minio_conn_id,
+        bucket_name=config.bucket_name
+    )
+    loader = RawTableLoader(config=config)
+
+    # Initialize tables once before processing files
+    loader.create_tables_if_not_exist()
+
+    file_keys = storage.list_files(prefix=config.source_prefix)
+    if not file_keys:
+        logger.info("No validated files found under prefix: %s", config.source_prefix)
+        return
+
+    logger.info("Found %d file(s) under prefix: %s", len(file_keys), config.source_prefix)
+
+    for key in file_keys:
+        file_name = key.split("/")[-1]
+
+        if loader.is_file_processed(file_name=file_name):
+            logger.info("File already loaded in earlier run, skipping: %s", file_name)
+            continue
+
+        logger.info("Processing file: %s", file_name)
+        raw_bytes = storage.read_bytes(key=key)
+        load_timestamp = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
+
+        df = loader.parse_content(file_name=file_name, raw_bytes=raw_bytes)
+        valid_df, rejected_rows = loader.validate_and_filter(
+            df=df,
+            file_name=file_name,
+            load_timestamp=load_timestamp
+        )
+        loader.load_records(
+            valid_df=valid_df,
+            rejected_rows=rejected_rows,
+            file_name=file_name,
+            load_timestamp=load_timestamp
+        )
+
+
 with DAG(
     dag_id="santhosh_actives_ingestion",
     default_args=default_args,
+    description="Actives Ingestion Pipeline: validate_and_reject, then load_raw_table",
     schedule=None,
     catchup=False,
     max_active_runs=1,
     tags=["assessment", "actives_feed"],
 ) as dag:
 
-    validate_files_task = PythonOperator(
-        task_id="validate_and_route_files",
+    validate_and_reject_task = PythonOperator(
+        task_id="validate_and_reject",
         python_callable=validate_and_route_landing_files,
     )
+
+    load_raw_table_task = PythonOperator(
+        task_id="load_raw_table",
+        python_callable=run_load_raw_table,
+    )
+
+    # Enforce task execution order
+    validate_and_reject_task >> load_raw_table_task
