@@ -331,8 +331,4 @@ def test_live_doris_loading_and_idempotent_rerun():
         )
         assert cur.fetchone()["cnt"] == 3
 
-    with conn.cursor() as cur:
-        cur.execute(f"DELETE FROM {config.doris.database}.{config.doris.raw_table} WHERE file_name = %s", (f_valid,))
-        cur.execute(f"DELETE FROM {config.doris.database}.{config.doris.rejected_table} WHERE file_name = %s", (f_valid,))
-        cur.execute(f"DELETE FROM {config.doris.database}.{config.doris.tracking_table} WHERE file_name = %s", (f_valid,))
     conn.close()

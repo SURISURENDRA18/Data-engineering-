@@ -134,34 +134,8 @@ def run_fixtures_pipeline():
         conn.close()
 
 
-    # Cleanup demo files from Doris (MinIO is read/copy-only; never delete from MinIO)
-    print("\nCleaning up demo test artifacts in Doris (MinIO objects preserved permanently)...")
-    try:
-        # Doris cleanup
-        conn = doris_client._get_connection()
-        with conn.cursor() as cur:
-            for sfile, _ in uploaded_files:
-                cur.execute(
-                    f"DELETE FROM {pipeline_config.doris.database}.{pipeline_config.doris.raw_table} "
-                    f"WHERE file_name = %s",
-                    (sfile,),
-                )
-                cur.execute(
-                    f"DELETE FROM {pipeline_config.doris.database}.{pipeline_config.doris.rejected_table} "
-                    f"WHERE file_name = %s",
-                    (sfile,),
-                )
-                cur.execute(
-                    f"DELETE FROM {pipeline_config.doris.database}.actives_file_tracking "
-                    f"WHERE file_name = %s",
-                    (sfile,),
-                )
-        conn.commit()
-        conn.close()
-        print("  -> Cleanup complete.")
-
-    except Exception as e:
-        print(f"  -> Cleanup notice: {e}")
+    # Non-destructive pipeline: All demo artifacts preserved permanently in Doris and MinIO
+    print("\nPipeline execution complete. All data and tracking records preserved permanently (No-Delete policy).")
 
     print("\n" + "=" * 70)
     print("PIPELINE DEMO EXECUTION COMPLETE (SUCCESS)")

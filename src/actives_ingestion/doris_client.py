@@ -26,7 +26,7 @@ class DorisClient:
         # In-memory storage for testing and offline execution
         self._mem_raw_table: list[dict[str, Any]] = []
 
-    def _get_connection(self):
+    def _get_connection(self, with_db: bool = True):
         """Get or create a PyMySQL connection using configured credentials."""
         if self._connection:
             return self._connection
@@ -41,11 +41,13 @@ class DorisClient:
                 port = int(connection["port"] or port)
                 user = str(connection["login"])
                 password = str(connection["password"])
+            db = self.config.database if with_db else None
             return pymysql.connect(
                 host=host,
                 port=port,
                 user=user,
                 password=password,
+                database=db,
                 connect_timeout=self.config.connect_timeout,
                 cursorclass=pymysql.cursors.DictCursor,
                 autocommit=True,
@@ -233,40 +235,85 @@ class DorisClient:
         user = self.config.user
         password = self.config.password
         if connection:
-            host = str(connection["host"])
-            user = str(connection["login"])
-            password = str(connection["password"])
+            host = str(connection.get("host") or host)
+            if connection.get("login"):
+                user = str(connection["login"])
+            if connection.get("password"):
+                password = str(connection["password"])
             extra = connection.get("extra") or {}
-            http_port = int(extra.get("http_port") or extra.get("httpPort") or http_port)
+            conn_http_port = extra.get("http_port") or extra.get("httpPort")
+            if conn_http_port:
+                http_port = int(conn_http_port)
 
-        url = f"http://{host}:{http_port}/api/{self.config.database}/{self.config.raw_table}/_stream_load"
+        ports_to_try = [http_port]
+        if self.config.http_port not in ports_to_try:
+            ports_to_try.append(self.config.http_port)
+
+        body = json.dumps(rows).encode("utf-8")
+        auth = HTTPBasicAuth(user, password)
         headers = {
             "format": "json",
             "strip_outer_array": "true",
             "Expect": "100-continue",
         }
-        body = json.dumps(rows).encode("utf-8")
-        auth = HTTPBasicAuth(user, password)
 
-        response = requests.put(
-            url,
-            data=body,
-            headers=headers,
-            auth=auth,
-            timeout=30,
-        )
+        last_error = None
+        for port in ports_to_try:
+            url = f"http://{host}:{port}/api/{self.config.database}/{self.config.raw_table}/_stream_load"
+            try:
+                response = requests.put(
+                    url,
+                    data=body,
+                    headers=headers,
+                    auth=auth,
+                    timeout=30,
+                )
 
-        if response.status_code != 200:
-            raise RuntimeError(f"Doris Stream Load HTTP returned status {response.status_code}: {response.text}")
+                if response.status_code != 200:
+                    raise RuntimeError(f"Doris Stream Load HTTP returned status {response.status_code}: {response.text}")
 
-        resp_json = response.json()
-        status = resp_json.get("Status")
-        if status not in ("Success", "OK"):
-            raise RuntimeError(f"Doris Stream Load failed: {resp_json.get('Message', resp_json)}")
+                resp_json = response.json()
+                status = resp_json.get("Status")
+                total_rows = resp_json.get("NumberTotalRows", len(rows))
+                loaded_rows = resp_json.get("NumberLoadedRows", 0)
+                filtered_rows = resp_json.get("NumberFilteredRows", 0)
+                unselected_rows = resp_json.get("NumberUnselectedRows", 0)
+                message = resp_json.get("Message", "")
+                error_url = resp_json.get("ErrorURL", "")
 
-        loaded_rows = resp_json.get("NumberLoadedRows", len(rows))
-        logger.info(f"Doris Stream Load succeeded. Loaded {loaded_rows} rows.")
-        return loaded_rows
+                logger.info(
+                    "Doris Stream Load response: Status=%s, NumberTotalRows=%s, NumberLoadedRows=%s, "
+                    "NumberFilteredRows=%s, NumberUnselectedRows=%s, Message=%s%s",
+                    status,
+                    total_rows,
+                    loaded_rows,
+                    filtered_rows,
+                    unselected_rows,
+                    message,
+                    f", ErrorURL={error_url}" if error_url else "",
+                )
+
+                if status not in ("Success", "OK"):
+                    raise RuntimeError(
+                        f"Doris Stream Load failed: status={status}, message={message}, error_url={error_url}"
+                    )
+
+                if filtered_rows > 0:
+                    logger.warning(
+                        "Doris Stream Load had %s filtered rows! ErrorURL: %s",
+                        filtered_rows,
+                        error_url,
+                    )
+
+                return loaded_rows
+            except Exception as e:
+                last_error = e
+                logger.warning("Doris Stream Load attempt on port %s failed: %s", port, e)
+                continue
+
+        if last_error:
+            raise last_error
+        return 0
 
     def _bulk_insert_mysql(self, rows: list[dict[str, Any]]) -> int:
         """Batch insert raw active records via PyMySQL connection."""
