@@ -257,7 +257,7 @@ def run_load_raw_table(**context):
 
 
 with DAG(
-    dag_id="actives_ingestion_dag",
+    dag_id="santhosh_actives_ingestion",
     default_args=default_args,
     description="Actives Ingestion Pipeline: validate_and_reject, then load_raw_table",
     schedule=None,
