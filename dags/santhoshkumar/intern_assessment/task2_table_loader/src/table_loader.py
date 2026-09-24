@@ -26,14 +26,14 @@ class RawTableLoader:
         """Initializes all necessary Doris tables once before file ingestion begins."""
         # 1. Audit Table
         create_audit_sql = f"""
-        CREATE TABLE IF NOT EXISTS {self.config.audit_table} (
-            file_name VARCHAR(255) NOT NULL,
-            records_loaded INT DEFAULT 0,
-            records_rejected INT DEFAULT 0,
-            loaded_at DATETIME NOT NULL
+        CREATE TABLE IF NOT EXISTS `{self.config.audit_table}` (
+            `file_name` VARCHAR(255) NOT NULL,
+            `records_loaded` INT DEFAULT 0,
+            `records_rejected` INT DEFAULT 0,
+            `loaded_at` DATETIME NOT NULL
         )
-        UNIQUE KEY(file_name)
-        DISTRIBUTED BY HASH(file_name) BUCKETS 1
+        UNIQUE KEY(`file_name`)
+        DISTRIBUTED BY HASH(`file_name`) BUCKETS 1
         PROPERTIES (
             "replication_num" = "1"
         );
@@ -42,17 +42,17 @@ class RawTableLoader:
 
         # 2. Reject Table
         create_reject_sql = f"""
-        CREATE TABLE IF NOT EXISTS {self.config.reject_table} (
-            iccid VARCHAR(64) NOT NULL,
-            file_name VARCHAR(255) NOT NULL,
-            reject_reason VARCHAR(100) NOT NULL,
-            companyid VARCHAR(64),
-            customernumber VARCHAR(64),
-            raw_row_record TEXT,
-            rejected_at DATETIME NOT NULL
+        CREATE TABLE IF NOT EXISTS `{self.config.reject_table}` (
+            `iccid` VARCHAR(64) NOT NULL,
+            `file_name` VARCHAR(255) NOT NULL,
+            `reject_reason` VARCHAR(100) NOT NULL,
+            `companyid` VARCHAR(64),
+            `customernumber` VARCHAR(64),
+            `raw_row_record` TEXT,
+            `rejected_at` DATETIME NOT NULL
         )
-        DUPLICATE KEY(iccid, file_name)
-        DISTRIBUTED BY HASH(iccid) BUCKETS 3
+        DUPLICATE KEY(`iccid`, `file_name`)
+        DISTRIBUTED BY HASH(`iccid`) BUCKETS 3
         PROPERTIES (
             "replication_num" = "1"
         );
@@ -60,26 +60,29 @@ class RawTableLoader:
         self.doris_hook.run(create_reject_sql)
 
         # 3. Target Raw Table
+        # Drop stale table if schema is mismatched from previous test runs
+        self.doris_hook.run(f"DROP TABLE IF EXISTS `{self.config.target_table}` FORCE;")
+
         cols_ddl = [f"`{col}` VARCHAR(255)" for col in self.config.expected_columns if col != "iccid"]
         create_target_sql = f"""
-        CREATE TABLE IF NOT EXISTS {self.config.target_table} (
-            iccid VARCHAR(64) NOT NULL,
+        CREATE TABLE IF NOT EXISTS `{self.config.target_table}` (
+            `iccid` VARCHAR(64) NOT NULL,
             {', '.join(cols_ddl)},
-            file_name VARCHAR(255),
-            loaded_at DATETIME
+            `file_name` VARCHAR(255),
+            `loaded_at` DATETIME
         )
-        DUPLICATE KEY(iccid)
-        DISTRIBUTED BY HASH(iccid) BUCKETS 3
+        DUPLICATE KEY(`iccid`)
+        DISTRIBUTED BY HASH(`iccid`) BUCKETS 3
         PROPERTIES (
             "replication_num" = "1"
         );
         """
         self.doris_hook.run(create_target_sql)
-        logger.info("Doris tables verified / created successfully.")
+        logger.info("Doris tables verified and created with complete schema successfully.")
 
     def is_file_processed(self, file_name: str) -> bool:
         """Checks if the file was already loaded into Doris."""
-        sql = f"SELECT 1 FROM {self.config.audit_table} WHERE file_name = %s LIMIT 1;"
+        sql = f"SELECT 1 FROM `{self.config.audit_table}` WHERE `file_name` = %s LIMIT 1;"
         records = self.doris_hook.get_records(sql, parameters=(file_name,))
         return bool(records)
 
@@ -164,11 +167,12 @@ class RawTableLoader:
                 ordered_cols = ["iccid"] + [c for c in valid_df.columns if c != "iccid"]
                 valid_df = valid_df[ordered_cols]
 
-                escaped_cols = [f"`{c}`" if c == "type" else c for c in ordered_cols]
+                # Backtick all columns to avoid Doris SQL keyword collisions
+                escaped_cols = [f"`{c}`" for c in ordered_cols]
                 placeholders = ", ".join(["%s"] * len(ordered_cols))
 
                 insert_sql = (
-                    f"INSERT INTO {self.config.target_table} ({', '.join(escaped_cols)}) "
+                    f"INSERT INTO `{self.config.target_table}` ({', '.join(escaped_cols)}) "
                     f"VALUES ({placeholders});"
                 )
                 cursor.executemany(insert_sql, [tuple(r) for r in valid_df.to_numpy()])
@@ -176,16 +180,16 @@ class RawTableLoader:
             # 2. Insert rejected rows into the rejection table
             if rejected_rows:
                 reject_sql = f"""
-                    INSERT INTO {self.config.reject_table}
-                    (iccid, file_name, reject_reason, companyid, customernumber, raw_row_record, rejected_at)
+                    INSERT INTO `{self.config.reject_table}`
+                    (`iccid`, `file_name`, `reject_reason`, `companyid`, `customernumber`, `raw_row_record`, `rejected_at`)
                     VALUES (%s, %s, %s, %s, %s, %s, %s);
                 """
                 cursor.executemany(reject_sql, rejected_rows)
 
             # 3. Insert processing summary into the audit tracking table
             audit_sql = f"""
-                INSERT INTO {self.config.audit_table}
-                (file_name, records_loaded, records_rejected, loaded_at)
+                INSERT INTO `{self.config.audit_table}`
+                (`file_name`, `records_loaded`, `records_rejected`, `loaded_at`)
                 VALUES (%s, %s, %s, %s);
             """
             cursor.execute(
