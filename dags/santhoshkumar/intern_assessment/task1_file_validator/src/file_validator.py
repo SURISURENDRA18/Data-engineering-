@@ -76,13 +76,14 @@ class FileValidator:
         if len(headers) < 9 or headers != cls.EXPECTED_HEADERS:
             return False, "invalid_column_count"
 
-        # 6. invalid_column_count (Data row verification)
+        # 6. Row verification: allow rows that have at least mandatory columns (>= 21) up to 46
         expected_field_count = len(cls.EXPECTED_HEADERS)
         for row_idx, line in enumerate(stream, start=2):
             stripped = line.rstrip("\r\n")
             if not stripped:
                 continue
-            if len(stripped.split(cls.DELIMITER)) != expected_field_count:
+            field_count = len(stripped.split(cls.DELIMITER))
+            if field_count < 21 or field_count > expected_field_count:
                 return False, "invalid_column_count"
 
         # 7. duplicate
@@ -102,8 +103,7 @@ class FileValidator:
         cls, filename: str, raw_bytes: bytes
     ) -> Tuple[Optional[bytes], Optional[str], int, int]:
         """
-        Extracts valid 46-column rows for business resilience.
-        Returns: (cleaned_bytes, audit_manifest_json, valid_count, dropped_count)
+        Pads rows with missing trailing columns to 46 columns.
         """
         stream = cls._get_text_stream(raw_bytes, filename)
         if not stream:
@@ -121,15 +121,19 @@ class FileValidator:
             if not stripped:
                 continue
             fields = stripped.split(cls.DELIMITER)
-            if len(fields) == expected_field_count:
-                cleaned_lines.append(stripped)
+            
+            # Row has enough fields to cover mandatory keys and does not exceed 46
+            if 21 <= len(fields) <= expected_field_count:
+                if len(fields) < expected_field_count:
+                    fields = fields + [""] * (expected_field_count - len(fields))
+                cleaned_lines.append(cls.DELIMITER.join(fields))
                 valid_count += 1
             else:
                 dropped_rows.append({
                     "row_number": row_idx,
                     "field_count": len(fields),
                     "expected": expected_field_count,
-                    "reason": "ROW_FIELD_COUNT_MISMATCH"
+                    "reason": "ROW_FIELD_COUNT_OUT_OF_BOUNDS"
                 })
 
         audit_manifest = {
