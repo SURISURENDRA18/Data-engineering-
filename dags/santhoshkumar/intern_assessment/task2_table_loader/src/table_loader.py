@@ -4,7 +4,12 @@ import logging
 from typing import Dict, List, Tuple
 import pandas as pd
 from airflow.providers.mysql.hooks.mysql import MySqlHook
-from src.config import LoaderConfig
+
+# Safe import fallback so Airflow never gets confused between Task 1 and Task 2
+try:
+    from task2_table_loader.src.config import LoaderConfig
+except ImportError:
+    from src.config import LoaderConfig
 
 # Initialize module logger
 logger = logging.getLogger(__name__)
@@ -14,14 +19,12 @@ class RawTableLoader:
     """Handles decompression, parsing, row validation, deduplication, and Doris database writes."""
 
     def __init__(self, config: LoaderConfig) -> None:
-        # Save pipeline configuration reference
         self.config = config
-        # Initialize MySQLHook configured for Apache Doris via Airflow connection
         self.doris_hook = MySqlHook(mysql_conn_id=config.doris_conn_id)
 
     def create_tables_if_not_exist(self) -> None:
         """Initializes all necessary Doris tables once before file ingestion begins."""
-        # 1. Audit Table (matches audit_sql insert query)
+        # 1. Audit Table
         create_audit_sql = f"""
         CREATE TABLE IF NOT EXISTS {self.config.audit_table} (
             file_name VARCHAR(255) NOT NULL,
@@ -37,7 +40,7 @@ class RawTableLoader:
         """
         self.doris_hook.run(create_audit_sql)
 
-        # 2. Reject Table (matches reject_sql insert query)
+        # 2. Reject Table
         create_reject_sql = f"""
         CREATE TABLE IF NOT EXISTS {self.config.reject_table} (
             iccid VARCHAR(64) NOT NULL,
@@ -57,9 +60,6 @@ class RawTableLoader:
         self.doris_hook.run(create_reject_sql)
 
         # 3. Target Raw Table
-        # Drop stale/corrupted table if present from previous test runs
-        self.doris_hook.run(f"DROP TABLE IF EXISTS {self.config.target_table} FORCE;")
-
         cols_ddl = [f"`{col}` VARCHAR(255)" for col in self.config.expected_columns if col != "iccid"]
         create_target_sql = f"""
         CREATE TABLE IF NOT EXISTS {self.config.target_table} (
@@ -78,7 +78,7 @@ class RawTableLoader:
         logger.info("Doris tables verified / created successfully.")
 
     def is_file_processed(self, file_name: str) -> bool:
-        """Enforces idempotency by checking if the file already exists in the audit table."""
+        """Checks if the file was already loaded into Doris."""
         sql = f"SELECT 1 FROM {self.config.audit_table} WHERE file_name = %s LIMIT 1;"
         records = self.doris_hook.get_records(sql, parameters=(file_name,))
         return bool(records)
