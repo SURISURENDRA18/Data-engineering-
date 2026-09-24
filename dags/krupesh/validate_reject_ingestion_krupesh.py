@@ -8,9 +8,9 @@ import io
 
 # 1. THE DAG MANAGER
 with DAG(
-    dag_id="krupesh_validate_and_reject",
+    dag_id="krupesh_validate_and_reject_ingestion",
     start_date=datetime(2026, 1, 1),
-    schedule_interval=None,
+    schedule=None,
     catchup=False
 ) as dag:
 
@@ -19,7 +19,7 @@ with DAG(
     def scan_and_sort_files():
         print("Starting Airflow Cloud Validator...")
         
-        s3 = S3Hook(aws_conn_id="minio_connection")
+        s3 = S3Hook(aws_conn_id="krupesh_minio")
         bucket = "crushftp"
         
         expected_headers = [
