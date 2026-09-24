@@ -61,7 +61,7 @@ src/models/                            Plain data containers
 src/utils/                             Checksum, logging, key-building helpers
 sql/ddl/                               CREATE TABLE statements
 sql/queries/                           Parameterized SELECT/INSERT statements
-tests/                                 68 tests: unit + pipeline integration
+tests/                                 82 tests: unit + pipeline integration
 scripts/run_local.py                   Runs the pipeline outside Airflow, for local verification
 ```
 
@@ -370,7 +370,7 @@ pip install -r requirements-dev.txt
 pytest -q
 ```
 
-68 tests, no live infrastructure required:
+82 tests, no live infrastructure required:
 - **Unit tests** for every validator (pure functions, no mocking), the
   tracking layer, the loaders, and MinIO client helpers.
 - **MinIO** is faked with a hand-rolled `FakeMinioClient` (`tests/conftest.py`)
@@ -393,7 +393,7 @@ rather than needing their own fixture files).
 
 ## Live verification results
 
-Beyond the 68-test suite (fakes/mocks), the pipeline was run for real
+Beyond the 82-test suite (fakes/mocks), the pipeline was run for real
 against the live MinIO bucket (`crushftp`) and live Doris (`database_ganesh`)
 using `scripts/run_local.py`. This surfaced two genuine findings, both
 already reflected in the code:
