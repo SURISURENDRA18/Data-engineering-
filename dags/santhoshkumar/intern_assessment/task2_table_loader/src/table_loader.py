@@ -14,17 +14,31 @@ logger = logging.getLogger(__name__)
 
 
 class RawTableLoader:
-    """Handles decompression, parsing, row validation, deduplication, and Doris database writes."""
+    """Handles decompression, parsing, row validation, deduplication, and Doris database writes strictly to santhosh_actives_db."""
 
     def __init__(self, config: LoaderConfig) -> None:
         self.config = config
         self.doris_hook = MySqlHook(mysql_conn_id=config.doris_conn_id)
+        # Force database name to santhosh_actives_db
+        self.db = getattr(config, "database_name", "santhosh_actives_db") or "santhosh_actives_db"
+
+    def _get_qualified_table(self, table_name: str) -> str:
+        """Returns fully qualified `database`.`table` name."""
+        return f"`{self.db}`.`{table_name}`"
 
     def create_tables_if_not_exist(self) -> None:
-        """Initializes all necessary Doris tables once before file ingestion begins."""
+        """Initializes all necessary Doris tables once before file ingestion begins strictly in santhosh_actives_db."""
+        # Ensure database exists and select it
+        self.doris_hook.run(f"CREATE DATABASE IF NOT EXISTS `{self.db}`;")
+        self.doris_hook.run(f"USE `{self.db}`;")
+
+        audit_table = self._get_qualified_table(self.config.audit_table)
+        reject_table = self._get_qualified_table(self.config.reject_table)
+        target_table = self._get_qualified_table(self.config.target_table)
+
         # 1. Audit Table
         create_audit_sql = f"""
-        CREATE TABLE IF NOT EXISTS `{self.config.audit_table}` (
+        CREATE TABLE IF NOT EXISTS {audit_table} (
             `file_name` VARCHAR(255) NOT NULL,
             `records_loaded` INT DEFAULT 0,
             `records_rejected` INT DEFAULT 0,
@@ -40,7 +54,7 @@ class RawTableLoader:
 
         # 2. Reject Table
         create_reject_sql = f"""
-        CREATE TABLE IF NOT EXISTS `{self.config.reject_table}` (
+        CREATE TABLE IF NOT EXISTS {reject_table} (
             `iccid` VARCHAR(64) NOT NULL,
             `file_name` VARCHAR(255) NOT NULL,
             `reject_reason` VARCHAR(100) NOT NULL,
@@ -58,12 +72,9 @@ class RawTableLoader:
         self.doris_hook.run(create_reject_sql)
 
         # 3. Target Raw Table
-        # Drop stale table if schema is mismatched from previous test runs
-        self.doris_hook.run(f"DROP TABLE IF EXISTS `{self.config.target_table}` FORCE;")
-
         cols_ddl = [f"`{col}` VARCHAR(255)" for col in self.config.expected_columns if col != "iccid"]
         create_target_sql = f"""
-        CREATE TABLE IF NOT EXISTS `{self.config.target_table}` (
+        CREATE TABLE IF NOT EXISTS {target_table} (
             `iccid` VARCHAR(64) NOT NULL,
             {', '.join(cols_ddl)},
             `file_name` VARCHAR(255),
@@ -76,12 +87,13 @@ class RawTableLoader:
         );
         """
         self.doris_hook.run(create_target_sql)
-        logger.info("Doris tables verified and created successfully.")
+        logger.info("Doris tables verified and created successfully in %s.", self.db)
 
     def is_file_processed(self, file_name: str) -> bool:
         """Checks if the file was already loaded into Doris."""
         try:
-            sql = f"SELECT 1 FROM `{self.config.audit_table}` WHERE `file_name` = %s LIMIT 1;"
+            audit_table = self._get_qualified_table(self.config.audit_table)
+            sql = f"SELECT 1 FROM {audit_table} WHERE `file_name` = %s LIMIT 1;"
             records = self.doris_hook.get_records(sql, parameters=(file_name,))
             return bool(records)
         except Exception:
@@ -164,6 +176,13 @@ class RawTableLoader:
         cursor = conn.cursor()
 
         try:
+            # Force current session to use santhosh_actives_db
+            cursor.execute(f"USE `{self.db}`;")
+
+            audit_table = self._get_qualified_table(self.config.audit_table)
+            reject_table = self._get_qualified_table(self.config.reject_table)
+            target_table = self._get_qualified_table(self.config.target_table)
+
             # 1. Insert valid rows into the target table
             if not valid_df.empty:
                 ordered_cols = ["iccid"] + [c for c in valid_df.columns if c != "iccid"]
@@ -173,7 +192,7 @@ class RawTableLoader:
                 placeholders = ", ".join(["%s"] * len(ordered_cols))
 
                 insert_sql = (
-                    f"INSERT INTO `{self.config.target_table}` ({', '.join(escaped_cols)}) "
+                    f"INSERT INTO {target_table} ({', '.join(escaped_cols)}) "
                     f"VALUES ({placeholders});"
                 )
                 cursor.executemany(insert_sql, [tuple(r) for r in valid_df.to_numpy()])
@@ -181,7 +200,7 @@ class RawTableLoader:
             # 2. Insert rejected rows into the rejection table
             if rejected_rows:
                 reject_sql = f"""
-                    INSERT INTO `{self.config.reject_table}`
+                    INSERT INTO {reject_table}
                     (`iccid`, `file_name`, `reject_reason`, `companyid`, `customernumber`, `raw_row_record`, `rejected_at`)
                     VALUES (%s, %s, %s, %s, %s, %s, %s);
                 """
@@ -189,7 +208,7 @@ class RawTableLoader:
 
             # 3. Insert processing summary into the audit tracking table
             audit_sql = f"""
-                INSERT INTO `{self.config.audit_table}`
+                INSERT INTO {audit_table}
                 (`file_name`, `records_loaded`, `records_rejected`, `loaded_at`)
                 VALUES (%s, %s, %s, %s);
             """
@@ -200,8 +219,8 @@ class RawTableLoader:
 
             conn.commit()
             logger.info(
-                "Ingestion completed for %s: %d valid loaded, %d rejected",
-                file_name, len(valid_df), len(rejected_rows)
+                "Ingestion completed for %s: %d valid loaded, %d rejected into %s",
+                file_name, len(valid_df), len(rejected_rows), self.db
             )
 
         except Exception as exc:
