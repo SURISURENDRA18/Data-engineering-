@@ -15,13 +15,15 @@ CURRENT_DIR = Path(__file__).resolve().parent
 PARENT_DIR = CURRENT_DIR.parent
 ASSESSMENT_ROOT = PARENT_DIR.parent
 
-for p in [str(PARENT_DIR), str(ASSESSMENT_ROOT / "task2_table_loader")]:
+# Add directories to sys.path so task1 and task2 modules import cleanly
+for p in [str(ASSESSMENT_ROOT), str(PARENT_DIR), str(ASSESSMENT_ROOT / "task2_table_loader")]:
     if p not in sys.path:
         sys.path.insert(0, p)
 
-from src.config import PipelineConfig
-from src.file_validator import FileValidator
-from src.storage import StorageManager
+# Task 1 Validator dependencies
+from task1_file_validator.src.config import PipelineConfig
+from task1_file_validator.src.file_validator import FileValidator
+from task1_file_validator.src.storage import StorageManager
 
 # Task 2 Loader dependencies
 from task2_table_loader.src.config import LoaderConfig
@@ -241,7 +243,7 @@ def run_load_raw_table(**context):
 
 
 with DAG(
-    dag_id="santhosh_actives_ingestion",
+    dag_id="actives_ingestion_dag",
     default_args=default_args,
     description="Actives Ingestion Pipeline: validate_and_reject, then load_raw_table",
     schedule=None,
