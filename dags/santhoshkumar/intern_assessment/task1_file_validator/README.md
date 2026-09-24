@@ -1,10 +1,47 @@
 # Task 1: File Handler and Validator
 
-This project is the first stage of our data ingestion pipeline. It automatically reads incoming daily `Actives` files from the landing area, checks them against validation rules, and routes them to the correct MinIO folders.
+Task 1 is the first stage of the ingestion pipeline. It scans incoming daily Actives files (active SIM records for a region) from the MinIO landing location (`crushftp/mediation/landing`). It checks each file against a strict list of 8 sequential validation rules. If a file passes every rule, it routes it to `validated/`; if it fails any rule, it moves it to `rejected/<reason>/` using the matching reason name as the folder name.
 
 ---
 
-## 1. Project Folder Structure
+## 1. Architecture Overview
+
+```text
+               AIRFLOW (Orchestration Only)
+                           |
+               actives_ingestion_dag.py
+                           |
+             +-------------+-------------+
+             |                           |
+        File Stream                 Config & Schema
+    (Non-destructive)               (src/config.py)
+             |                           |
+             +-------------+-------------+
+                           |
+                 src/file_validator.py
+             (8-Rule Validation Engine)
+                           |
+        +------------------+------------------+
+        |                                     |
+   [PASS ALL]                            [FAIL ANY]
+        |                                     |
+MinIO: validated/                     MinIO: rejected/<reason>/
+(HOL_01_Active_...)                   (invalid_column_count,
+                                       pattern_mismatch, etc.)
+                                              |
+                                      Audit & Manifest
+                                      (audit_summary.csv)
+
+
+## 2. Project Folder Structure
+
+task1_file_validator/
+├── dags/
+│   └── actives_ingestion_dag.py     # Airflow DAG definition and execution logic
+├── src/
+│   ├── config.py                    # Constants, 46 column names, regex, MinIO paths
+│   └── file_validator.py            # Core 8-step validation & row recovery logic
+└── README.md                        # Documentation and architecture guide
 
 Inside `task1_file_validator/`, the files are organized as follows:
 
@@ -19,7 +56,7 @@ Inside `task1_file_validator/`, the files are organized as follows:
 
 ---
 
-## 2. Validation Rules & Execution Order
+## 3. Validation Rules & Execution Order
 
 Every file is checked against 8 rules in this exact sequence (stopping at the first rule it fails):
 
@@ -34,7 +71,7 @@ Every file is checked against 8 rules in this exact sequence (stopping at the fi
 
 ---
 
-## 3. Key Design Decisions & Assumptions
+## 4. Key Design Decisions & Assumptions
 
 ### Handling Empty Values Between Semicolons (`;;`)
 * In our CSV data, consecutive delimiters like `;;` represent intentional empty/null values.
@@ -60,7 +97,7 @@ Every file is checked against 8 rules in this exact sequence (stopping at the fi
 
 ---
 
-## 4. How to Run the Pipeline
+## 5. How to Run the Pipeline
 
 1. Open the **Airflow UI** (`http://34.130.209.7:32002`).
 2. Locate the DAG: **`santhosh_actives_ingestion`**.
