@@ -1,8 +1,10 @@
 # Task 1: File Handler and Validator
 
+
 Task 1 is the first stage of the ingestion pipeline. It scans incoming daily Actives files (active SIM records for a region) from the MinIO landing location (`crushftp/mediation/landing`). It checks each file against a strict list of 8 sequential validation rules. If a file passes every rule, it routes it to `validated/`; if it fails any rule, it moves it to `rejected/<reason>/` using the matching reason name as the folder name.
 
 ---
+
 
 ## 1. Architecture Overview
 
@@ -31,10 +33,12 @@ MinIO: validated/                     MinIO: rejected/<reason>/
                                               |
                                       Audit & Manifest
                                       (audit_summary.csv)
+```
 
 
 ## 2. Project Folder Structure
 
+```text
 task1_file_validator/
 ├── dags/
 │   └── actives_ingestion_dag.py     # Airflow DAG definition and execution logic
@@ -42,7 +46,7 @@ task1_file_validator/
 │   ├── config.py                    # Constants, 46 column names, regex, MinIO paths
 │   └── file_validator.py            # Core 8-step validation & row recovery logic
 └── README.md                        # Documentation and architecture guide
-
+```
 Inside `task1_file_validator/`, the files are organized as follows:
 
 * **`dags/actives_ingestion_dag.py`**:
@@ -55,6 +59,7 @@ Inside `task1_file_validator/`, the files are organized as follows:
   Configuration file holding constants such as delimiter (`;`), expected 46 column names in order, file regex patterns, and MinIO storage paths.
 
 ---
+
 
 ## 3. Validation Rules & Execution Order
 
@@ -70,6 +75,7 @@ Every file is checked against 8 rules in this exact sequence (stopping at the fi
 8. **`sequence_invalid`**: Ensures sequence numbers for a region do not repeat or arrive out of sequence.
 
 ---
+
 
 ## 4. Key Design Decisions & Assumptions
 
