@@ -5,7 +5,10 @@ import logging
 import re
 from typing import Dict, List, Optional, Set, Tuple
 
-from src.config import DELIMITER, EXPECTED_HEADERS, FILENAME_PATTERN
+try:
+    from task1_file_validator.src.config import DELIMITER, EXPECTED_HEADERS, FILENAME_PATTERN
+except ImportError:
+    from src.config import DELIMITER, EXPECTED_HEADERS, FILENAME_PATTERN
 
 logger = logging.getLogger(__name__)
 
