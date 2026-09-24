@@ -43,8 +43,10 @@ task1_file_validator/
 ├── dags/
 │   └── actives_ingestion_dag.py     # Airflow DAG definition and execution logic
 ├── src/
+│   ├── __init__.py                  # Python package marker
 │   ├── config.py                    # Constants, 46 column names, regex, MinIO paths
-│   └── file_validator.py            # Core 8-step validation & row recovery logic
+│   ├── file_validator.py            # Core 8-step validation & row recovery logic
+│   └── storage.py                   # MinIO client connection, streaming, and routing helpers
 └── README.md                        # Documentation and architecture guide
 ```
 Inside `task1_file_validator/`, the files are organized as follows:
