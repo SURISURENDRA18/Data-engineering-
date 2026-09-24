@@ -217,8 +217,14 @@ def run_load_raw_table(**context):
 
     logger.info("Found %d file(s) under prefix: %s", len(file_keys), config.source_prefix)
 
-    for key in file_keys:
+    total_loaded = 0
+    total_rejected = 0
+
+    for key in sorted(file_keys):
         file_name = key.split("/")[-1]
+
+        if not file_name.endswith((".csv", ".csv.gz")):
+            continue
 
         if loader.is_file_processed(file_name=file_name):
             logger.info("File already loaded in earlier run, skipping: %s", file_name)
@@ -228,18 +234,26 @@ def run_load_raw_table(**context):
         raw_bytes = storage.read_bytes(key=key)
         load_timestamp = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
 
-        df = loader.parse_content(file_name=file_name, raw_bytes=raw_bytes)
-        valid_df, rejected_rows = loader.validate_and_filter(
-            df=df,
-            file_name=file_name,
-            load_timestamp=load_timestamp
-        )
-        loader.load_records(
-            valid_df=valid_df,
-            rejected_rows=rejected_rows,
-            file_name=file_name,
-            load_timestamp=load_timestamp
-        )
+        try:
+            df = loader.parse_content(file_name=file_name, raw_bytes=raw_bytes)
+            valid_df, rejected_rows = loader.validate_and_filter(
+                df=df,
+                file_name=file_name,
+                load_timestamp=load_timestamp
+            )
+            loader.load_records(
+                valid_df=valid_df,
+                rejected_rows=rejected_rows,
+                file_name=file_name,
+                load_timestamp=load_timestamp
+            )
+            total_loaded += len(valid_df)
+            total_rejected += len(rejected_rows)
+        except Exception as e:
+            logger.error("Error processing file %s: %s", file_name, str(e))
+            raise e
+
+    logger.info("All files processed. Total valid rows: %d, Total rejected: %d", total_loaded, total_rejected)
 
 
 with DAG(
@@ -262,5 +276,4 @@ with DAG(
         python_callable=run_load_raw_table,
     )
 
-    # Enforce task execution order
     validate_and_reject_task >> load_raw_table_task

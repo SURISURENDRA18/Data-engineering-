@@ -5,13 +5,11 @@ from typing import Dict, List, Tuple
 import pandas as pd
 from airflow.providers.mysql.hooks.mysql import MySqlHook
 
-# Safe import fallback so Airflow never gets confused between Task 1 and Task 2
 try:
     from task2_table_loader.src.config import LoaderConfig
 except ImportError:
     from src.config import LoaderConfig
 
-# Initialize module logger
 logger = logging.getLogger(__name__)
 
 
@@ -78,13 +76,16 @@ class RawTableLoader:
         );
         """
         self.doris_hook.run(create_target_sql)
-        logger.info("Doris tables verified and created with complete schema successfully.")
+        logger.info("Doris tables verified and created successfully.")
 
     def is_file_processed(self, file_name: str) -> bool:
         """Checks if the file was already loaded into Doris."""
-        sql = f"SELECT 1 FROM `{self.config.audit_table}` WHERE `file_name` = %s LIMIT 1;"
-        records = self.doris_hook.get_records(sql, parameters=(file_name,))
-        return bool(records)
+        try:
+            sql = f"SELECT 1 FROM `{self.config.audit_table}` WHERE `file_name` = %s LIMIT 1;"
+            records = self.doris_hook.get_records(sql, parameters=(file_name,))
+            return bool(records)
+        except Exception:
+            return False
 
     def parse_content(self, file_name: str, raw_bytes: bytes) -> pd.DataFrame:
         """Decompresses gzip files if necessary and parses semicolon-delimited CSV into a DataFrame."""
@@ -95,7 +96,8 @@ class RawTableLoader:
             io.BytesIO(raw_bytes),
             sep=";",
             dtype=str,
-            keep_default_na=False
+            keep_default_na=False,
+            on_bad_lines="skip"
         )
 
         df.columns = [
@@ -118,9 +120,9 @@ class RawTableLoader:
         rejected_rows: List[Tuple] = []
 
         for _, row in df.iterrows():
-            iccid = str(row["iccid"]).strip()
-            customer_no = str(row["customernumber"]).strip()
-            company_id = str(row["companyid"]).strip()
+            iccid = str(row.get("iccid", "")).strip()
+            customer_no = str(row.get("customernumber", "")).strip()
+            company_id = str(row.get("companyid", "")).strip()
 
             reject_reason = None
 
@@ -167,7 +169,6 @@ class RawTableLoader:
                 ordered_cols = ["iccid"] + [c for c in valid_df.columns if c != "iccid"]
                 valid_df = valid_df[ordered_cols]
 
-                # Backtick all columns to avoid Doris SQL keyword collisions
                 escaped_cols = [f"`{c}`" for c in ordered_cols]
                 placeholders = ", ".join(["%s"] * len(ordered_cols))
 
