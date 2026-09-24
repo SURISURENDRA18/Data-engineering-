@@ -13,13 +13,13 @@ from typing import Dict, Optional
 from src.clients.minio_client import list_objects, read_object_bytes
 from src.config.actives_schema import LoadStatus
 from src.config.settings import Settings
-from src.loaders.raw_loader import ensure_raw_tables_exist, load_file_to_raw_table
+from src.loaders.raw_loader import StreamLoadFn, ensure_raw_tables_exist, load_file_to_raw_table
 from src.tracking.file_tracker import get_load_status, record_load_result
 from src.utils.checksum import compute_sha256
 from src.utils.logging_utils import get_logger, log_file_error, log_load_result, log_pipeline_summary
 
 
-def run_raw_load(s3_client, conn, settings: Settings) -> dict:
+def run_raw_load(s3_client, conn, settings: Settings, stream_load_fn: Optional[StreamLoadFn] = None) -> dict:
     logger = get_logger()
     ensure_raw_tables_exist(conn, settings)
 
@@ -46,7 +46,7 @@ def run_raw_load(s3_client, conn, settings: Settings) -> dict:
                 logger.info(f"FILE_LOAD_SKIPPED file={filename} reason=already_loaded")
                 continue
 
-            result = load_file_to_raw_table(conn, settings, raw_bytes, filename)
+            result = load_file_to_raw_table(conn, settings, raw_bytes, filename, stream_load_fn=stream_load_fn)
             record_load_result(
                 conn,
                 settings,

@@ -9,17 +9,27 @@ either succeeds or raises.
 import csv
 import io
 from datetime import datetime, timezone
-from typing import List, Tuple
+from typing import Callable, List, Optional, Tuple
 
 import pandas as pd
 
-from src.clients.doris_client import executemany_write, render_sql, run_ddl_script
+from src.clients.doris_client import get_doris_connection_params, render_sql, run_ddl_script, stream_load
 from src.config.actives_schema import COLUMN_DB_MAP, CSV_DELIMITER, EXPECTED_COLUMNS, RAW_TABLE_DATA_COLUMNS, RowRejectReason
 from src.config.settings import Settings
 from src.loaders.rejected_row_loader import insert_rejected_rows
 from src.models.validation_result import RowLoadResult
+from src.utils.checksum import compute_sha256
 from src.validators.file_content_validator import decompress_if_gzip
 from src.validators.row_structure_validator import pad_row
+
+# Doris Stream Load splits the CSV body on this literal byte. A control
+# character (not ';'/',') is used deliberately -- several source columns
+# (e.g. CompanyName, whitelistedzones) are free text and could plausibly
+# contain a printable delimiter, but not a raw 0x01 byte.
+STREAM_LOAD_COLUMN_SEPARATOR = "\x01"
+RAW_TABLE_LOAD_COLUMNS = ["file_name"] + RAW_TABLE_DATA_COLUMNS + ["loaded_at"]
+
+StreamLoadFn = Callable[[Settings, bytes, str], dict]
 
 
 def _now() -> datetime:
@@ -90,14 +100,56 @@ def dedup_rows(df: pd.DataFrame, key_column: str = "iccid") -> Tuple[pd.DataFram
     return deduped, before - len(deduped)
 
 
-def build_insert_rows(df: pd.DataFrame, file_name: str, loaded_at: datetime) -> List[tuple]:
-    rows = []
+def _sql_field(column: str, value) -> str:
+    """Every raw_actives_daily column is nullable except iccid (its NOT
+    NULL UNIQUE KEY) -- an empty source value in any other column must
+    load as a real NULL, not the string "". Doris's CSV Stream Load
+    format uses the literal `\\N` token for NULL, same convention as
+    MySQL LOAD DATA. iccid is never empty here: apply_row_level_rules
+    already routed empty-iccid rows to raw_actives_daily_rejected before
+    this function runs."""
+    text = str(value)
+    if column != "iccid" and text.strip() == "":
+        return "\\N"
+    return text
+
+
+def build_stream_load_csv(df: pd.DataFrame, file_name: str, loaded_at: datetime) -> bytes:
+    """Serializes accepted rows into Doris Stream Load's raw CSV body --
+    one line per row, columns joined by STREAM_LOAD_COLUMN_SEPARATOR, in
+    the exact order RAW_TABLE_LOAD_COLUMNS/the `columns` param declares."""
+    loaded_at_str = loaded_at.strftime("%Y-%m-%d %H:%M:%S")
+    lines = []
     for _, row in df.iterrows():
-        rows.append(tuple([file_name] + [row[col] for col in RAW_TABLE_DATA_COLUMNS] + [loaded_at]))
-    return rows
+        values = [file_name] + [_sql_field(col, row[col]) for col in RAW_TABLE_DATA_COLUMNS] + [loaded_at_str]
+        lines.append(STREAM_LOAD_COLUMN_SEPARATOR.join(values))
+    return "\n".join(lines).encode("utf-8")
 
 
-def load_file_to_raw_table(conn, settings: Settings, raw_bytes: bytes, filename: str) -> RowLoadResult:
+def _default_stream_load(settings: Settings, csv_body: bytes, label: str) -> dict:
+    """Production Stream Load call: resolves host/credentials from the same
+    Airflow Connection the PyMySQL path uses, and sends to the configurable
+    Stream Load HTTP port (separate from the MySQL-protocol query port)."""
+    params = get_doris_connection_params(settings.doris_conn_id)
+    return stream_load(
+        host=params["host"],
+        http_port=settings.doris_stream_load_port,
+        user=params["user"],
+        password=params["password"],
+        database=settings.doris_database,
+        table=settings.raw_table,
+        csv_body=csv_body,
+        columns=RAW_TABLE_LOAD_COLUMNS,
+        label=label,
+        column_separator=STREAM_LOAD_COLUMN_SEPARATOR,
+    )
+
+
+def load_file_to_raw_table(
+    conn, settings: Settings, raw_bytes: bytes, filename: str, stream_load_fn: Optional[StreamLoadFn] = None
+) -> RowLoadResult:
+    stream_load_fn = stream_load_fn or _default_stream_load
+
     df = read_validated_file_as_dataframe(raw_bytes, filename)
     total_rows = len(df)
 
@@ -107,9 +159,13 @@ def load_file_to_raw_table(conn, settings: Settings, raw_bytes: bytes, filename:
     loaded_at = _now()
 
     if not deduped_df.empty:
-        insert_rows = build_insert_rows(deduped_df, filename, loaded_at)
-        sql = render_sql("queries/insert_raw_actives_rows.sql", DORIS_DATABASE=settings.doris_database)
-        executemany_write(conn, sql, insert_rows)
+        csv_body = build_stream_load_csv(deduped_df, filename, loaded_at)
+        # Deterministic per source-file content: a retried Stream Load call
+        # for the same file/bytes reuses the same label, which Doris treats
+        # as an idempotent no-op ("Label Already Exists") rather than a
+        # second load.
+        label = f"ganesh_raw_{compute_sha256(raw_bytes)}"
+        stream_load_fn(settings, csv_body, label)
 
     if not rejected_df.empty:
         insert_rejected_rows(conn, settings, rejected_df, filename, loaded_at)

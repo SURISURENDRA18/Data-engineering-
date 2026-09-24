@@ -33,6 +33,13 @@ class Settings:
     rejected_table: str = "raw_actives_daily_rejected"
     tracking_table: str = "file_processing_log"
 
+    # Stream Load's HTTP endpoint is separate from the MySQL-protocol query
+    # port (doris_conn_id's port, used only for get_doris_connection).
+    # Confirmed reachable on the same host as the query port (34.130.209.7
+    # in this environment) via a live TCP check -- see
+    # scripts/verify_stream_load.py.
+    doris_stream_load_port: int = 32713
+
     def rejected_prefix_for(self, reason: str) -> str:
         return f"{self.rejected_prefix}{reason}/"
 

@@ -12,9 +12,10 @@
 -- physical column declaration order. This is a required technical
 -- adjustment (column order only -- no name, type, or key change), not a
 -- reinterpretation of the schema. Confirmed against the real Doris
--- cluster (database_ganesh). INSERT statements name columns explicitly
--- (see sql/queries/insert_raw_actives_rows.sql), so this reordering has
--- no effect on how rows are written or read.
+-- cluster (database_ganesh). Rows are written via Stream Load
+-- (src/clients/doris_client.py:stream_load), which names columns
+-- explicitly in its `columns` header, so this reordering has no effect
+-- on how rows are written or read.
 CREATE TABLE IF NOT EXISTS ${DORIS_DATABASE}.raw_actives_daily (
     iccid                           VARCHAR(32) NOT NULL,
     file_name                      VARCHAR(255),

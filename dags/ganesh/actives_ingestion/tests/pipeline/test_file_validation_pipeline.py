@@ -17,6 +17,16 @@ def _put(s3_client, filename: str, body: bytes):
     s3_client.put_object(Bucket="crushftp", Key=f"{LANDING}{filename}", Body=body)
 
 
+def test_empty_landing_does_not_break_the_pipeline(s3_client, fake_doris_conn, test_settings):
+    """landing/ is a shared, externally-populated zone that can genuinely
+    be empty at evaluation time (e.g. another candidate's pipeline having
+    just drained it) -- the pipeline must return a clean zeroed summary,
+    not raise."""
+    summary = run_validate_and_reject(s3_client, fake_doris_conn, test_settings)
+
+    assert summary == {"files_discovered": 0, "files_in_scope": 0, "files_validated": 0, "files_rejected": 0}
+
+
 def test_valid_file_moves_to_validated_and_gets_tracked(s3_client, fake_doris_conn, test_settings):
     filename = "HOL_01_Active_000000001_20260921050000.csv"
     _put(s3_client, filename, VALID_CONTENT)

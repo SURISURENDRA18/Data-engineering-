@@ -233,6 +233,31 @@ def fake_doris_conn():
     return FakeDorisConnection()
 
 
+class FakeStreamLoad:
+    """Stands in for src.clients.doris_client.stream_load in tests (no real
+    Doris HTTP endpoint available). Replays the same UNIQUE KEY(iccid)
+    replace-on-insert semantics as FakeCursor's raw-table INSERT path,
+    since real Doris applies that constraint regardless of load method."""
+
+    def __init__(self, store: FakeDorisStore):
+        self._store = store
+        self.calls: list = []
+
+    def __call__(self, settings, csv_body: bytes, label: str) -> dict:
+        self.calls.append({"csv_body": csv_body, "label": label})
+        for line in csv_body.decode("utf-8").splitlines():
+            if not line:
+                continue
+            row = dict(zip(RAW_COLUMNS, line.split("\x01")))
+            self._store.raw_rows[row["iccid"]] = row
+        return {"Status": "Success"}
+
+
+@pytest.fixture
+def fake_stream_load(fake_doris_conn):
+    return FakeStreamLoad(fake_doris_conn.store)
+
+
 @pytest.fixture
 def test_settings():
     return Settings(

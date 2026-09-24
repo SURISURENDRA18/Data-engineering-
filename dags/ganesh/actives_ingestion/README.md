@@ -176,7 +176,56 @@ For every file in `validated/`:
    `NULL_OR_ZERO_COMPANY_ID`.
 2. Deduplicate remaining rows on `iccid`, keeping the last occurrence.
 3. Stamp `file_name` and `loaded_at` on every loaded row.
-4. Insert into `raw_actives_daily`.
+4. Bulk-load into `raw_actives_daily` via Doris **Stream Load**
+   (`src/clients/doris_client.py:stream_load`), not row-by-row/batched
+   `INSERT` — see **Stream Load** below. `raw_actives_daily_rejected`
+   (low volume) still uses a plain parameterized `INSERT`.
+
+## Stream Load
+
+Row-by-row/batched `INSERT` was replaced with Doris **Stream Load**
+(`PUT /api/{db}/{table}/_stream_load`) for `raw_actives_daily`: far
+higher throughput for bulk file loads, and fewer, larger commits per
+file instead of many small ones (batched `INSERT` was a factor in an
+earlier Doris version-graph corruption incident after an infrastructure
+outage interrupted an in-progress load).
+
+- **Column separator**: `\x01` (a control byte), not `,`/`;` — several
+  source columns are free text (e.g. `CompanyName`) and could plausibly
+  contain a printable delimiter, but not a raw 0x01 byte.
+- **Label = `ganesh_raw_<sha256 of the file's raw bytes>`**: deterministic
+  per source file, so a retried Stream Load call for the same file reuses
+  the same label, which Doris treats as an idempotent no-op ("Label
+  Already Exists") rather than a second load.
+- **FE→BE redirect**: Stream Load's initial `PUT` gets a `307` redirect
+  from the FE to the owning BE node. `stream_load()` follows this
+  manually (`allow_redirects=False` + a second `PUT` to the `Location`
+  header) instead of relying on `requests`'s automatic redirect
+  following, because `requests` strips the `Authorization` header on
+  cross-host redirects — which would otherwise silently break Basic Auth
+  on that hop.
+- **Port**: Stream Load's HTTP endpoint (`doris_stream_load_port`, default
+  `32713` in `src/config/settings.py`) is separate from the MySQL-protocol
+  query port used by `doris_conn_id`/`get_doris_connection`, but resolves
+  to the same host. Confirmed live: `34.130.209.7:32713` accepts the
+  connection while `34.130.209.7:31545` is the query port — both on the
+  same host as MinIO in this environment.
+- **Empty fields load as Doris `NULL`, not `''`** (per mentor guidance:
+  every column is nullable except iccid, its NOT NULL key -- an empty
+  value elsewhere must be a real NULL). `_sql_field()` converts any
+  empty/blank value to the CSV `\N` token (Doris's NULL marker, same
+  convention as MySQL `LOAD DATA`) for every column except `iccid`,
+  which is never empty at this point anyway (`apply_row_level_rules`
+  already routes empty-iccid rows to `raw_actives_daily_rejected`
+  upstream). An earlier version of this got this backwards (empty
+  string, not NULL) and was corrected after review.
+- **Live-verified** (not just unit-tested with a mocked `requests.put`):
+  a real Stream Load call against `database_ganesh.raw_actives_daily`
+  with a distinctive test `iccid` and an empty `companyname` returned
+  `{"Status": "Success", "NumberLoadedRows": 1, "NumberFilteredRows": 0}`,
+  and the row was confirmed via direct query to have `companyname IS
+  NULL = 1` (a real NULL, not `''`). The test row was deleted
+  immediately after.
 
 ## Idempotency strategy
 
