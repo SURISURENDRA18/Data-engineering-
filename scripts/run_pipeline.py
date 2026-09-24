@@ -134,21 +134,9 @@ def run_fixtures_pipeline():
         conn.close()
 
 
-    # Cleanup demo files from MinIO and Doris
-    print("\nCleaning up demo test artifacts...")
+    # Cleanup demo files from Doris (MinIO is read/copy-only; never delete from MinIO)
+    print("\nCleaning up demo test artifacts in Doris (MinIO objects preserved permanently)...")
     try:
-        # MinIO cleanup
-        for obj in minio_client.list_objects(
-            pipeline_config.minio.bucket, prefix=pipeline_config.minio.validated_prefix, recursive=True
-        ):
-            if file_prefix in obj.object_name:
-                minio_client.remove_object(pipeline_config.minio.bucket, obj.object_name)
-        for obj in minio_client.list_objects(
-            pipeline_config.minio.bucket, prefix=pipeline_config.minio.rejected_prefix, recursive=True
-        ):
-            if file_prefix in obj.object_name:
-                minio_client.remove_object(pipeline_config.minio.bucket, obj.object_name)
-
         # Doris cleanup
         conn = doris_client._get_connection()
         with conn.cursor() as cur:

@@ -21,8 +21,8 @@ class MinioConfig:
     secure: bool = field(default_factory=lambda: os.getenv("MINIO_SECURE", "false").lower() in ("true", "1", "yes"))
     bucket: str = field(default_factory=lambda: os.getenv("MINIO_BUCKET", "crushftp"))
     landing_prefix: str = field(default_factory=lambda: os.getenv("MINIO_LANDING_PREFIX", "mediation/landing/"))
-    validated_prefix: str = field(default_factory=lambda: os.getenv("MINIO_VALIDATED_PREFIX", "mediation/validated/"))
-    rejected_prefix: str = field(default_factory=lambda: os.getenv("MINIO_REJECTED_PREFIX", "mediation/rejected/"))
+    validated_prefix: str = field(default_factory=lambda: os.getenv("MINIO_VALIDATED_PREFIX", "mediation/surendra/validated/"))
+    rejected_prefix: str = field(default_factory=lambda: os.getenv("MINIO_REJECTED_PREFIX", "mediation/surendra/rejected/"))
 
 
 @dataclass(frozen=True)
@@ -33,7 +33,7 @@ class DorisConfig:
     http_port: int = field(default_factory=lambda: int(os.getenv("DORIS_HTTP_PORT", "32713")))
     user: str = field(default_factory=lambda: os.getenv("DORIS_USER", "root"))
     password: str = field(default_factory=lambda: os.getenv("DORIS_PASSWORD", ""))
-    database: str = field(default_factory=lambda: os.getenv("DORIS_DATABASE", "actives_db"))
+    database: str = field(default_factory=lambda: os.getenv("DORIS_DATABASE", "surendra_db"))
     raw_table: str = field(default_factory=lambda: os.getenv("DORIS_RAW_TABLE", "raw_actives_daily"))
     rejected_table: str = field(default_factory=lambda: os.getenv("DORIS_REJECTED_TABLE", "raw_actives_daily_rejected"))
     tracking_table: str = field(default_factory=lambda: os.getenv("DORIS_TRACKING_TABLE", "actives_file_tracking"))

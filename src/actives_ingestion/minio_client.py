@@ -30,7 +30,7 @@ class MinioObjectMeta:
 
 
 class MinioService:
-    """Provides safe MinIO object storage operations: listing, streaming, and copy-delete movements."""
+    """Provides safe object storage operations with non-destructive routing."""
 
     def __init__(self, config: MinioConfig | None = None, client: Minio | None = None, in_memory: bool = False):
         self.config = config or pipeline_config.minio
@@ -108,6 +108,47 @@ class MinioService:
     def list_validated_files(self) -> list[str]:
         """List all object keys under validated prefix."""
         return [obj.object_name for obj in self.list_validated_objects()]
+
+    def list_rejected_objects(self) -> list[MinioObjectMeta]:
+        """List all rejected objects with metadata populated directly from listing."""
+        return self._list_objects_with_meta(self.config.rejected_prefix)
+
+    def list_rejected_files(self) -> list[str]:
+        """List all object keys under rejected prefix."""
+        return [obj.object_name for obj in self.list_rejected_objects()]
+
+    def object_exists(self, object_name: str) -> bool:
+        """Check whether an object exists in the configured MinIO bucket."""
+        if self.in_memory:
+            bucket_data = self._mem_buckets.get(self.config.bucket, {})
+            return object_name in bucket_data
+
+        try:
+            client = self._get_client()
+            client.stat_object(self.config.bucket, object_name)
+            return True
+        except S3Error as e:
+            if e.code in ("NoSuchKey", "NoSuchObject", "404 Not Found"):
+                return False
+            raise
+        except Exception:
+            return False
+
+    def get_destination_files(self) -> dict[str, str]:
+        """Return mapping of basename -> destination object key for all validated and rejected files."""
+        destinations: dict[str, str] = {}
+        for obj in self.list_validated_objects():
+            destinations[os.path.basename(obj.object_name)] = obj.object_name
+        for obj in self.list_rejected_objects():
+            destinations[os.path.basename(obj.object_name)] = obj.object_name
+        return destinations
+
+    def destination_exists(self, filename: str) -> tuple[bool, str | None]:
+        """Check if a filename already exists under validated or rejected destinations."""
+        destinations = self.get_destination_files()
+        if filename in destinations:
+            return True, destinations[filename]
+        return False, None
 
     def _list_prefix(self, prefix: str) -> list[str]:
         """List object keys under given prefix (backwards-compatible alias)."""
@@ -199,14 +240,14 @@ class MinioService:
             length=len(data),
         )
 
-    def move_object(self, source_object: str, destination_object: str) -> None:
-        """Safely move an object from source to destination (copy-delete pattern) with retries."""
+    def copy_object(self, source_object: str, destination_object: str) -> None:
+        """Copy an object to a destination without deleting the source."""
         if self.in_memory:
             bucket_data = self._mem_buckets.setdefault(self.config.bucket, {})
             if source_object in bucket_data:
-                bucket_data[destination_object] = bucket_data.pop(source_object)
+                bucket_data[destination_object] = bucket_data[source_object]
                 if source_object in self._size_cache:
-                    self._size_cache[destination_object] = self._size_cache.pop(source_object)
+                    self._size_cache[destination_object] = self._size_cache[source_object]
             return
 
         client = self._get_client()
@@ -216,18 +257,21 @@ class MinioService:
         for attempt in range(1, max_attempts + 1):
             try:
                 client.copy_object(self.config.bucket, destination_object, copy_source)
-                client.remove_object(self.config.bucket, source_object)
                 if source_object in self._size_cache:
-                    self._size_cache[destination_object] = self._size_cache.pop(source_object)
+                    self._size_cache[destination_object] = self._size_cache[source_object]
                 return
             except Exception as exc:
                 if attempt == max_attempts:
-                    logger.error("Failed to move %s -> %s after %d attempts: %s", source_object, destination_object, max_attempts, exc)
+                    logger.error("Failed to copy %s -> %s after %d attempts: %s", source_object, destination_object, max_attempts, exc)
                     raise
                 time.sleep(0.2 * (2 ** (attempt - 1)))
 
+    def move_object(self, source_object: str, destination_object: str) -> None:
+        """Backward-compatible alias for non-destructive copy routing."""
+        self.copy_object(source_object, destination_object)
+
     def move_to_validated(self, source_object: str) -> str:
-        """Move object from landing to validated folder."""
+        """Copy object from landing to validated folder, retaining the source."""
         file_name = os.path.basename(source_object)
         destination = f"{self.config.validated_prefix.rstrip('/')}/{file_name}"
         self.move_object(source_object, destination)
@@ -235,23 +279,9 @@ class MinioService:
         return destination
 
     def move_to_rejected(self, source_object: str, reason: str) -> str:
-        """Move object from landing to rejected/<reason>/ folder."""
+        """Copy object from landing to rejected/<reason>, retaining the source."""
         file_name = os.path.basename(source_object)
         destination = f"{self.config.rejected_prefix.rstrip('/')}/{reason}/{file_name}"
         self.move_object(source_object, destination)
         logger.debug("Moved %s -> %s (reason: %s)", source_object, destination, reason)
         return destination
-
-    def delete_object(self, object_name: str) -> None:
-        """Delete an object from bucket (used for test cleanup)."""
-        self._size_cache.pop(object_name, None)
-        if self.in_memory:
-            bucket_data = self._mem_buckets.get(self.config.bucket, {})
-            bucket_data.pop(object_name, None)
-            return
-
-        try:
-            client = self._get_client()
-            client.remove_object(self.config.bucket, object_name)
-        except Exception as e:
-            logger.warning("Could not delete object '%s': %s", object_name, e)

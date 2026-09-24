@@ -88,9 +88,6 @@ class FakeMinioClient:
         content = self._buckets[source.bucket_name][source.object_name]
         self._buckets.setdefault(bucket_name, {})[object_name] = content
 
-    def remove_object(self, bucket_name: str, object_name: str) -> None:
-        self._buckets.get(bucket_name, {}).pop(object_name, None)
-
 
 def _strip_sql_comments(sql: str) -> str:
     """Our .sql files lead with '-- PURPOSE:' documentation comments, so the

@@ -27,13 +27,13 @@ use environment variables as a fallback.
 MinIO:
 
 - Bucket: `crushftp`
-- Input: `mediation/landing/`
-- Validated: `mediation/validated/`
-- Rejected: `mediation/rejected/<reason>/`
+- Input: `mediation/landing/` (Shared permanent raw source, never deleted)
+- Validated: `mediation/surendra/validated/`
+- Rejected: `mediation/surendra/rejected/<reason>/`
 
 Doris:
 
-- Database: `actives_db`
+- Database: `surendra_db`
 - Raw table: `raw_actives_daily`
 - Rejected-row table: `raw_actives_daily_rejected`
 - Tracking table: `actives_file_tracking`
@@ -58,9 +58,9 @@ check:
 | 7 | File content is not a previously processed SHA-256 | `duplicate` |
 | 8 | Region sequence is new and strictly increasing | `sequence_invalid` |
 
-Passing files are copied to `mediation/validated/`. Failed files are copied to
-the matching rejected-reason prefix. File movement uses bounded concurrency,
-retries, and idempotent tracking.
+Passing files are copied to `mediation/surendra/validated/`. Failed files are copied to
+`mediation/surendra/rejected/<reason>/`. File routing uses copy-only operations (landing files
+remain permanently untouched), bounded concurrency, retries, and destination-exists idempotency.
 
 ## Task 2: row validation and loading
 

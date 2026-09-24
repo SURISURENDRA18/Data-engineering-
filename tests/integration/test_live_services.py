@@ -203,29 +203,15 @@ def test_live_all_seven_rejections_and_valid_movement(live_minio):
     assert summary.files_rejected == 8
 
     # Verify locations in MinIO
-    assert f"mediation/validated/{f_valid}" in minio.list_validated_files()
-    assert minio.get_object_size(f"mediation/rejected/{REASON_PATTERN_MISMATCH}/{f_pattern}") >= 0
-    assert minio.get_object_size(f"mediation/rejected/{REASON_ZERO_SIZE}/{f_zero}") == 0
-    assert minio.get_object_size(f"mediation/rejected/{REASON_HEADER_ONLY}/{f_hdr}") > 0
-    assert minio.get_object_size(f"mediation/rejected/{REASON_NOT_TEXT_FORMAT}/{f_corrupt}") > 0
-    assert minio.get_object_size(f"mediation/rejected/{REASON_INVALID_COLUMN_COUNT}/{f_bad_hdr}") > 0
-    assert minio.get_object_size(f"mediation/rejected/{REASON_INVALID_COLUMN_COUNT}/{f_bad_row}") > 0
-    assert minio.get_object_size(f"mediation/rejected/{REASON_DUPLICATE}/{f_duplicate}") > 0
-    assert minio.get_object_size(f"mediation/rejected/{REASON_SEQUENCE_INVALID}/{f_seq}") > 0
-
-    # Cleanup MinIO test objects
-    minio.delete_object(f"mediation/validated/{f_valid}")
-    for p in [f_pattern, f_zero, f_hdr, f_corrupt, f_bad_hdr, f_bad_row, f_duplicate, f_seq]:
-        for r_dir in [
-            REASON_PATTERN_MISMATCH,
-            REASON_ZERO_SIZE,
-            REASON_HEADER_ONLY,
-            REASON_NOT_TEXT_FORMAT,
-            REASON_INVALID_COLUMN_COUNT,
-            REASON_DUPLICATE,
-            REASON_SEQUENCE_INVALID,
-        ]:
-            minio.delete_object(f"mediation/rejected/{r_dir}/{p}")
+    assert f"mediation/surendra/validated/{f_valid}" in minio.list_validated_files()
+    assert minio.get_object_size(f"mediation/surendra/rejected/{REASON_PATTERN_MISMATCH}/{f_pattern}") >= 0
+    assert minio.get_object_size(f"mediation/surendra/rejected/{REASON_ZERO_SIZE}/{f_zero}") == 0
+    assert minio.get_object_size(f"mediation/surendra/rejected/{REASON_HEADER_ONLY}/{f_hdr}") > 0
+    assert minio.get_object_size(f"mediation/surendra/rejected/{REASON_NOT_TEXT_FORMAT}/{f_corrupt}") > 0
+    assert minio.get_object_size(f"mediation/surendra/rejected/{REASON_INVALID_COLUMN_COUNT}/{f_bad_hdr}") > 0
+    assert minio.get_object_size(f"mediation/surendra/rejected/{REASON_INVALID_COLUMN_COUNT}/{f_bad_row}") > 0
+    assert minio.get_object_size(f"mediation/surendra/rejected/{REASON_DUPLICATE}/{f_duplicate}") > 0
+    assert minio.get_object_size(f"mediation/surendra/rejected/{REASON_SEQUENCE_INVALID}/{f_seq}") > 0
 
 
 def test_live_doris_loading_and_idempotent_rerun():
@@ -250,7 +236,7 @@ def test_live_doris_loading_and_idempotent_rerun():
     # Make this test independently runnable when the MinIO routing test was
     # skipped or executed in a different order.
     f_valid = f"{TEST_PREFIX}01_Active_00001_20260922120000.csv"
-    if f"mediation/validated/{f_valid}" not in minio.list_validated_files():
+    if f"mediation/surendra/validated/{f_valid}" not in minio.list_validated_files():
         valid_rows = [
             {"CompanyID": "100", "CustomerNumber": "CUST_LIVE_1", "ICCID": "89014103211118510001", "PlanName": "PlanInitial"},
             {"CompanyID": "100", "CustomerNumber": "CUST_LIVE_1", "ICCID": "89014103211118510001", "PlanName": "PlanLatest"},
@@ -350,4 +336,3 @@ def test_live_doris_loading_and_idempotent_rerun():
         cur.execute(f"DELETE FROM {config.doris.database}.{config.doris.rejected_table} WHERE file_name = %s", (f_valid,))
         cur.execute(f"DELETE FROM {config.doris.database}.{config.doris.tracking_table} WHERE file_name = %s", (f_valid,))
     conn.close()
-    minio.delete_object(f"mediation/validated/{f_valid}")

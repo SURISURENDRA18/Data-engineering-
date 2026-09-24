@@ -16,6 +16,13 @@ import pytest
 from actives_ingestion.config import PipelineConfig
 from actives_ingestion.constants import (
     EXPECTED_COLUMNS,
+    REASON_DUPLICATE,
+    REASON_HEADER_ONLY,
+    REASON_INVALID_COLUMN_COUNT,
+    REASON_NOT_TEXT_FORMAT,
+    REASON_PATTERN_MISMATCH,
+    REASON_SEQUENCE_INVALID,
+    REASON_ZERO_SIZE,
     ROW_REASON_NULL_OR_EMPTY_CUSTOMER_NUMBER,
     ROW_REASON_NULL_OR_EMPTY_ICCID,
     ROW_REASON_NULL_OR_ZERO_COMPANY_ID,
@@ -105,8 +112,9 @@ def test_full_pipeline_happy_path(pipeline_env):
     assert t1_summary.files_validated == 1
     assert t1_summary.files_rejected == 0
 
-    assert minio.list_landing_files() == []
-    assert minio.list_validated_files() == [f"mediation/validated/{file_name}"]
+    # MinIO read/copy-only requirement: Original file is permanently retained in landing
+    assert minio.list_landing_files() == [f"mediation/landing/{file_name}"]
+    assert minio.list_validated_files() == [f"mediation/surendra/validated/{file_name}"]
 
     # 3. Run Task 2 (load_raw_table)
     t2_summary = raw_loader.load_all_validated_files()
@@ -137,6 +145,15 @@ def test_full_pipeline_happy_path(pipeline_env):
     assert t2_rerun_summary.files_skipped_duplicate == 1
     assert t2_rerun_summary.files_loaded == 0
 
+    # 7. Idempotency test: rerun Task 1 -> landing file stays in landing and is safely skipped
+    t1_rerun_summary = file_handler.process_landing_files()
+    assert t1_rerun_summary.files_discovered == 1
+    assert t1_rerun_summary.files_validated == 0
+    assert t1_rerun_summary.files_rejected == 0
+    assert t1_rerun_summary.files_skipped_duplicate == 1
+    assert minio.list_landing_files() == [f"mediation/landing/{file_name}"]
+    assert minio.list_validated_files() == [f"mediation/surendra/validated/{file_name}"]
+
 
 def test_full_pipeline_gzipped_file(pipeline_env):
     """Verify that .csv.gz files are validated, routed, uncompressed, and loaded into Doris."""
@@ -157,7 +174,7 @@ def test_full_pipeline_gzipped_file(pipeline_env):
 
     t1_summary = file_handler.process_landing_files()
     assert t1_summary.files_validated == 1
-    assert minio.list_validated_files() == [f"mediation/validated/{file_name}"]
+    assert minio.list_validated_files() == [f"mediation/surendra/validated/{file_name}"]
 
     t2_summary = raw_loader.load_all_validated_files()
     assert t2_summary.files_loaded == 1
@@ -189,9 +206,9 @@ def test_file_isolation_and_rejection_routing(pipeline_env):
     assert summary.files_validated == 1
     assert summary.files_rejected == 1
 
-    assert minio.list_validated_files() == [f"mediation/validated/{good_file}"]
-    rejected_files = minio._list_prefix("mediation/rejected/")
-    assert f"mediation/rejected/zero_size/{bad_file}" in rejected_files
+    assert minio.list_validated_files() == [f"mediation/surendra/validated/{good_file}"]
+    rejected_files = minio.list_rejected_files()
+    assert f"mediation/surendra/rejected/zero_size/{bad_file}" in rejected_files
 
     # Task 2 succeeds for the valid file despite the invalid file
     t2_summary = raw_loader.load_all_validated_files()
@@ -214,9 +231,9 @@ def test_task_2_per_file_isolation(pipeline_env):
     data2 = b"\x00\xff\xfe\x12\x34"
     data3 = make_csv_data([{"CompanyID": "300", "CustomerNumber": "C3", "ICCID": "ICC3"}])
 
-    minio.put_object_data(f"mediation/validated/{file1}", data1)
-    minio.put_object_data(f"mediation/validated/{file2}", data2)
-    minio.put_object_data(f"mediation/validated/{file3}", data3)
+    minio.put_object_data(f"mediation/surendra/validated/{file1}", data1)
+    minio.put_object_data(f"mediation/surendra/validated/{file2}", data2)
+    minio.put_object_data(f"mediation/surendra/validated/{file3}", data3)
 
     summary = raw_loader.load_all_validated_files()
     # file 1 succeeds, file 2 fails, file 3 succeeds
@@ -242,7 +259,7 @@ def test_failure_recovery_idempotency(pipeline_env):
         {"CompanyID": "100", "CustomerNumber": "C1", "ICCID": "ICC1"},
         {"CompanyID": "0", "CustomerNumber": "C2", "ICCID": "ICC2"},  # rejected
     ])
-    minio.put_object_data(f"mediation/validated/{file_name}", data)
+    minio.put_object_data(f"mediation/surendra/validated/{file_name}", data)
 
     # Simulate tracking update failure on first attempt
     orig_record_status = tracking_repo.record_status
@@ -276,3 +293,151 @@ def test_failure_recovery_idempotency(pipeline_env):
     rejected_rows = [r for r in reject_repo.get_rejected_rows() if r["file_name"] == file_name]
     assert len(rejected_rows) == 1
     assert rejected_rows[0]["customernumber"] == "C2"
+
+
+def test_landing_files_never_deleted_and_rerun_idempotent(pipeline_env):
+    """Verify hard requirement: MinIO files are never deleted and pipeline reruns are 100% idempotent."""
+    minio = pipeline_env["minio"]
+    file_handler = pipeline_env["file_handler"]
+    raw_loader = pipeline_env["raw_loader"]
+    doris = pipeline_env["doris"]
+
+    file_valid = "US_01_Active_00001_20260922120000.csv"
+    file_invalid = "US_01_Active_00002_20260922120000.csv"
+
+    valid_data = make_csv_data([
+        {"CompanyID": "100", "CustomerNumber": "CUST_IDEMP_1", "ICCID": "ICC_IDEMP_1", "PlanName": "PlanA"},
+    ])
+    # Put valid and zero-size invalid files into landing
+    minio.put_object_data(f"mediation/landing/{file_valid}", valid_data)
+    minio.put_object_data(f"mediation/landing/{file_invalid}", b"")
+
+    # Initial Run: Task 1
+    t1_run1 = file_handler.process_landing_files()
+    assert t1_run1.files_discovered == 2
+    assert t1_run1.files_validated == 1
+    assert t1_run1.files_rejected == 1
+    assert t1_run1.files_skipped_duplicate == 0
+
+    # Verify original files are permanently kept in landing/
+    landing_files = minio.list_landing_files()
+    assert f"mediation/landing/{file_valid}" in landing_files
+    assert f"mediation/landing/{file_invalid}" in landing_files
+
+    # Verify destinations exist
+    assert f"mediation/surendra/validated/{file_valid}" in minio.list_validated_files()
+    assert f"mediation/surendra/rejected/zero_size/{file_invalid}" in minio.list_rejected_files()
+
+    # Initial Run: Task 2
+    t2_run1 = raw_loader.load_all_validated_files()
+    assert t2_run1.files_loaded == 1
+    assert t2_run1.total_rows_loaded == 1
+
+    # Verify validated file is NEVER deleted from validated/
+    assert f"mediation/surendra/validated/{file_valid}" in minio.list_validated_files()
+
+    # Airflow Rerun / Retry 1: Task 1 rerun
+    t1_run2 = file_handler.process_landing_files()
+    assert t1_run2.files_discovered == 2
+    assert t1_run2.files_validated == 0
+    assert t1_run2.files_rejected == 0
+    assert t1_run2.files_skipped_duplicate == 2
+
+    # Landing files still intact
+    landing_files_rerun = minio.list_landing_files()
+    assert f"mediation/landing/{file_valid}" in landing_files_rerun
+    assert f"mediation/landing/{file_invalid}" in landing_files_rerun
+
+    # Airflow Rerun / Retry 2: Task 2 rerun
+    t2_run2 = raw_loader.load_all_validated_files()
+    assert t2_run2.files_loaded == 0
+    assert t2_run2.files_skipped_duplicate == 1
+
+    # Verify no duplicate records in Doris
+    loaded_rows = [r for r in doris.get_loaded_rows() if r["file_name"] == file_valid]
+    assert len(loaded_rows) == 1
+    assert loaded_rows[0]["iccid"] == "ICC_IDEMP_1"
+
+
+def test_all_seven_rejection_reasons_and_valid_routing_in_surendra_namespace(pipeline_env):
+    """Verify that all 7 rejection checks route to mediation/surendra/rejected/<reason>/ and valid to mediation/surendra/validated/."""
+    minio = pipeline_env["minio"]
+    file_handler = pipeline_env["file_handler"]
+
+    # 1. Valid file
+    f_valid = "US_01_Active_00001_20260922120000.csv"
+    valid_data = make_csv_data([{"CompanyID": "100", "CustomerNumber": "C1", "ICCID": "ICC1"}])
+    minio.put_object_data(f"mediation/landing/{f_valid}", valid_data)
+
+    # 2. Check 1: pattern_mismatch
+    f_pattern = "Invalid_Prefix_00001_20260922120000.csv"
+    minio.put_object_data(f"mediation/landing/{f_pattern}", valid_data)
+
+    # 3. Check 2: zero_size
+    f_zero = "US_01_Active_00002_20260922120000.csv"
+    minio.put_object_data(f"mediation/landing/{f_zero}", b"")
+
+    # 4. Check 3: header_only
+    f_hdr = "US_01_Active_00003_20260922120000.csv"
+    hdr_data = (",".join(EXPECTED_COLUMNS) + "\n").encode("utf-8")
+    minio.put_object_data(f"mediation/landing/{f_hdr}", hdr_data)
+
+    # 5. Check 4: not_text_format
+    f_corrupt = "US_01_Active_00004_20260922120000.csv"
+    corrupt_data = b"\x00\xff\xfe\x12\x34\x56"
+    minio.put_object_data(f"mediation/landing/{f_corrupt}", corrupt_data)
+
+    # 6. Check 5: invalid_column_count (header mismatch)
+    f_bad_hdr = "US_01_Active_00005_20260922120000.csv"
+    bad_hdr_data = b"col1,col2,col3\nval1,val2,val3\n"
+    minio.put_object_data(f"mediation/landing/{f_bad_hdr}", bad_hdr_data)
+
+    # 7. Check 6: invalid_column_count (data row field mismatch)
+    f_bad_row = "US_01_Active_00006_20260922120000.csv"
+    bad_row_data = (",".join(EXPECTED_COLUMNS) + "\nval1,val2\n").encode("utf-8")
+    minio.put_object_data(f"mediation/landing/{f_bad_row}", bad_row_data)
+
+    # 8. Check 7: duplicate
+    f_dup = "US_01_Active_00007_20260922120000.csv"
+    minio.put_object_data(f"mediation/landing/{f_dup}", valid_data)
+
+    # 9. Check 8: sequence_invalid (sequence number 0 < 1)
+    f_seq = "US_01_Active_00000_20260922120000.csv"
+    minio.put_object_data(f"mediation/landing/{f_seq}", valid_data)
+
+    summary = file_handler.process_landing_files()
+    assert summary.files_discovered == 9
+    assert summary.files_validated == 1
+    assert summary.files_rejected == 8
+    assert summary.files_skipped_duplicate == 0
+
+    # Verify all 9 files are permanently retained in mediation/landing/
+    landing_files = minio.list_landing_files()
+    for f in [f_valid, f_pattern, f_zero, f_hdr, f_corrupt, f_bad_hdr, f_bad_row, f_dup, f_seq]:
+        assert f"mediation/landing/{f}" in landing_files
+
+    # Verify validated file is in mediation/surendra/validated/
+    assert f"mediation/surendra/validated/{f_valid}" in minio.list_validated_files()
+
+    # Verify rejected files are in mediation/surendra/rejected/<reason>/
+    assert minio.object_exists(f"mediation/surendra/rejected/{REASON_PATTERN_MISMATCH}/{f_pattern}")
+    assert minio.object_exists(f"mediation/surendra/rejected/{REASON_ZERO_SIZE}/{f_zero}")
+    assert minio.object_exists(f"mediation/surendra/rejected/{REASON_HEADER_ONLY}/{f_hdr}")
+    assert minio.object_exists(f"mediation/surendra/rejected/{REASON_NOT_TEXT_FORMAT}/{f_corrupt}")
+    assert minio.object_exists(f"mediation/surendra/rejected/{REASON_INVALID_COLUMN_COUNT}/{f_bad_hdr}")
+    assert minio.object_exists(f"mediation/surendra/rejected/{REASON_INVALID_COLUMN_COUNT}/{f_bad_row}")
+    assert minio.object_exists(f"mediation/surendra/rejected/{REASON_DUPLICATE}/{f_dup}")
+    assert minio.object_exists(f"mediation/surendra/rejected/{REASON_SEQUENCE_INVALID}/{f_seq}")
+
+    # Verify no files were placed in old shared destinations
+    old_validated = minio._list_prefix("mediation/validated/")
+    old_rejected = minio._list_prefix("mediation/rejected/")
+    assert len(old_validated) == 0
+    assert len(old_rejected) == 0
+
+    # Verify rerun idempotency: all 9 files skipped, 0 re-routed
+    rerun_summary = file_handler.process_landing_files()
+    assert rerun_summary.files_discovered == 9
+    assert rerun_summary.files_validated == 0
+    assert rerun_summary.files_rejected == 0
+    assert rerun_summary.files_skipped_duplicate == 9

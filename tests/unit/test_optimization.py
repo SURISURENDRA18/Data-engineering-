@@ -56,7 +56,7 @@ def test_minio_metadata_cache_avoids_stat_calls():
 
     # Moving object updates size cache
     svc.move_to_validated("mediation/landing/file1.csv")
-    assert svc.get_object_size("mediation/validated/file1.csv") == 5
+    assert svc.get_object_size("mediation/surendra/validated/file1.csv") == 5
 
 
 def test_file_handler_batch_processing_and_counts():
