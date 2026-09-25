@@ -142,7 +142,7 @@ with DAG(
                 # Perfect file -> Validated
                 s3.copy_object(
                     source_bucket_key=full_cloud_path,
-                    dest_bucket_key=f"mediation/krupesh/validated/{file_name}",
+                    dest_bucket_key=f"mediation/krupesh2/validated/{file_name}",
                     source_bucket_name=bucket, dest_bucket_name=bucket
                 )
                 print("Result: PASSED. Copied to validated.")
@@ -151,7 +151,7 @@ with DAG(
                 # Broken file -> Rejected
                 s3.copy_object(
                     source_bucket_key=full_cloud_path,
-                    dest_bucket_key=f"mediation/krupesh/rejected/{failure_reason}/{file_name}",
+                    dest_bucket_key=f"mediation/krupesh2/rejected/{failure_reason}/{file_name}",
                     source_bucket_name=bucket, dest_bucket_name=bucket
                 )
                 print(f"Result: FAILED ({failure_reason}). Copied to rejected.")
