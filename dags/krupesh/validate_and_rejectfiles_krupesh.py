@@ -192,121 +192,205 @@ with DAG(
 
     
     # ---------------------------------------------------------
-    # TASK 2: LOAD TO APACHE DORIS
+    # TASK 2: LOAD TO APACHE DORIS (Strict Rules)
     # ---------------------------------------------------------
     @task
     def load_validated_to_doris():
-        print("Starting Doris Raw Table Loader...")
+        print("Starting Doris Raw Table Loader with Row-Level Rules...")
         
         from airflow.providers.mysql.hooks.mysql import MySqlHook
         import csv
         import io
         import gzip
+        from datetime import datetime
         
         s3 = S3Hook(aws_conn_id="krupesh_minio")
         bucket = "crushftp"
-        
-        # We assume you have a connection set up in Airflow for Doris
-        # Doris uses the MySQL protocol, so MySqlHook works perfectly!
         doris_hook = MySqlHook(mysql_conn_id="krupesh_doris")
         
-        # 1. Create the Table in Doris (if it doesn't exist)
-        # We use VARCHAR for everything in the RAW layer to prevent load crashes.
-        # Data types are usually cast in the Silver/Gold layers later.
-        create_table_sql = """
-        CREATE TABLE IF NOT EXISTS actives_raw (
-            CompanyID VARCHAR(255), CompanyName VARCHAR(255), InvoiceNumber VARCHAR(255),
-            BusinessUnitName VARCHAR(255), DepartmentName VARCHAR(255), CostCenterName VARCHAR(255),
-            CommercialOfferName VARCHAR(255), BusinessUnitLevel VARCHAR(255), BusinessUnitTAG VARCHAR(255),
-            SharedBalanceUsed VARCHAR(255), AccountNumber VARCHAR(255), CustomerNumber VARCHAR(255),
-            MSISDN VARCHAR(255), ProductStatus VARCHAR(255), ProvProductType VARCHAR(255),
-            ActivationDate VARCHAR(255), LastProductStatusChangeDate VARCHAR(255),
-            CommercialOfferDescription VARCHAR(255), LastTrafficDate VARCHAR(255), ProductID VARCHAR(255),
-            ICCID VARCHAR(255), ExtraMSISDN_1 VARCHAR(255), ExtraCreationDate_1 VARCHAR(255),
-            ExtraMSISDN_2 VARCHAR(255), ExtraCreationDate_2 VARCHAR(255), ExtraMSISDN_3 VARCHAR(255),
-            ExtraCreationDate_3 VARCHAR(255), ExtraMSISDN_4 VARCHAR(255), ExtraCreationDate_4 VARCHAR(255),
-            PlanName VARCHAR(255), PlanStartDate VARCHAR(255), Carrier_Name VARCHAR(255),
-            CDP_Platform VARCHAR(255), Carrier_AccountNo VARCHAR(255), ProviderName VARCHAR(255),
-            Type VARCHAR(255), Profile_version VARCHAR(255), Rate_Plan_Name VARCHAR(255),
-            Rate_Plan_Code_ID VARCHAR(255), Zone_Type VARCHAR(255), Whitelisted_Zones VARCHAR(255),
-            Blacklisted_Zones VARCHAR(255), SIM_Batch VARCHAR(255), SIM_Vendor VARCHAR(255),
-            Sim_Type VARCHAR(255), EID VARCHAR(255)
-        ) ENGINE=OLAP
-        DUPLICATE KEY(CompanyID, InvoiceNumber, MSISDN)
-        DISTRIBUTED BY HASH(MSISDN) BUCKETS 10
-        PROPERTIES (
-            "replication_allocation" = "tag.location.default: 1"
-        );
+        # 1. TABLE CREATION (Using their exact DDL)
+        # NOTE: If Doris throws the "ordered prefix" error on ICCID, you will need to 
+        # move `iccid VARCHAR(32) NOT NULL` to the very top of the column list!
+        create_raw_table_sql = """
+        CREATE TABLE IF NOT EXISTS raw_actives_daily (
+            file_name                  VARCHAR(255),
+            companyid                  VARCHAR(64),
+            companyname                VARCHAR(255),
+            invoicenumber              VARCHAR(64),
+            businessunitname           VARCHAR(255),
+            departmentname             VARCHAR(255),
+            costcentername             VARCHAR(255),
+            commercialoffername        VARCHAR(255),
+            businessunitlevel          VARCHAR(10),
+            businessunittag            VARCHAR(255),
+            sharedbalanceused          VARCHAR(50),
+            accountnumber              VARCHAR(64),
+            customernumber             VARCHAR(64),
+            msisdn                     VARCHAR(32),
+            productstatus              VARCHAR(50),
+            provproducttype            VARCHAR(100),
+            activationdate             VARCHAR(30),
+            lastproductstatuschangedate VARCHAR(30),
+            commercialofferdescription VARCHAR(255),
+            lasttrafficdate            VARCHAR(30),
+            productid                  VARCHAR(64),
+            iccid                      VARCHAR(32) NOT NULL,
+            extramsisdn1               VARCHAR(32),
+            extracreationdate1         VARCHAR(30),
+            extramsisdn2               VARCHAR(32),
+            extracreationdate2         VARCHAR(30),
+            extramsisdn3               VARCHAR(32),
+            extracreationdate3         VARCHAR(30),
+            extramsisdn4               VARCHAR(32),
+            extracreationdate4         VARCHAR(30),
+            planname                   VARCHAR(255),
+            planstartdate              VARCHAR(30),
+            carriername                VARCHAR(255),
+            cdpplatform                VARCHAR(100),
+            carrieraccountno           VARCHAR(64),
+            providername               VARCHAR(255),
+            `type`                     VARCHAR(50),
+            profileversion             VARCHAR(50),
+            rateplanname               VARCHAR(255),
+            rateplancodeid             VARCHAR(64),
+            zonetype                   VARCHAR(50),
+            whitelistedzones           VARCHAR(500),
+            blacklistedzones           VARCHAR(500),
+            simbatch                   VARCHAR(100),
+            simvendor                  VARCHAR(100),
+            simtype                    VARCHAR(50),
+            eid                        VARCHAR(64),
+            loaded_at                  DATETIME
+        )
+        UNIQUE KEY(iccid)
+        DISTRIBUTED BY HASH(iccid) BUCKETS 8
+        PROPERTIES ("replication_num" = "1");
         """
         
-        doris_hook.run(create_table_sql)
-        print("Doris table 'actives_raw' is ready.")
-
-        # 2. Find Validated Files
-        validated_prefix = "mediation/krupesh/validated/"
-        archive_prefix = "mediation/krupesh/archive/"
+        # Design our own reject table as requested (Appending reject_reason)
+        create_reject_table_sql = """
+        CREATE TABLE IF NOT EXISTS raw_actives_daily_rejected (
+            file_name                  VARCHAR(255),
+            companyid                  VARCHAR(64),
+            customernumber             VARCHAR(64),
+            iccid                      VARCHAR(32),
+            reject_reason              VARCHAR(255),
+            loaded_at                  DATETIME
+        )
+        DUPLICATE KEY(file_name)
+        DISTRIBUTED BY HASH(file_name) BUCKETS 1
+        PROPERTIES ("replication_num" = "1");
+        """
         
+        doris_hook.run(create_raw_table_sql)
+        doris_hook.run(create_reject_table_sql)
+
+        # 2. FILE DISCOVERY & IDEMPOTENCY
+        validated_prefix = "mediation/krupesh2/validated/"
+        archive_prefix = "mediation/krupesh2/archive/"
         validated_files = s3.list_keys(bucket_name=bucket, prefix=validated_prefix)
         
         if not validated_files:
-            print("No new validated files to load into Doris.")
+            print("No validated files to load.")
             return
 
-        # 3. Process and Load Each File
+        # 3. PROCESSING (Per-file isolation)
         for full_cloud_path in validated_files:
             file_name = full_cloud_path.split('/')[-1]
             if not file_name or file_name == "validated":
                 continue
                 
-            print(f"Loading {file_name} into Doris...")
-            
-            # Read and unzip
-            file_obj = s3.get_key(key=full_cloud_path, bucket_name=bucket)
-            raw_bytes = file_obj.get()['Body'].read()
-            
-            if file_name.endswith(".gz"):
-                file_text = gzip.decompress(raw_bytes).decode("utf-8-sig")
-            else:
-                file_text = raw_bytes.decode("utf-8-sig")
-                
-            reader = csv.reader(io.StringIO(file_text), delimiter=';')
+            print(f"\n--- Loading: {file_name} ---")
             
             try:
-                next(reader) # Skip the header row
-            except StopIteration:
-                continue # Empty file
+                # Read File
+                file_obj = s3.get_key(key=full_cloud_path, bucket_name=bucket)
+                raw_bytes = file_obj.get()['Body'].read()
                 
-            # Prepare rows for batch insert
-            rows_to_insert = []
-            for row in reader:
-                if row:
-                    rows_to_insert.append(tuple(row))
-            
-            # Batch Insert into Doris
-            if rows_to_insert:
-                doris_hook.insert_rows(
-                    table="actives_raw",
-                    rows=rows_to_insert,
-                    target_fields=None, # Auto-maps because we have exactly 46 columns
-                    commit_every=5000   # Batch size to prevent memory crashes
+                if file_name.endswith(".gz"):
+                    file_text = gzip.decompress(raw_bytes).decode("utf-8-sig")
+                else:
+                    file_text = raw_bytes.decode("utf-8-sig")
+                    
+                reader = csv.reader(io.StringIO(file_text), delimiter=';')
+                try:
+                    next(reader) # Skip Header
+                except StopIteration:
+                    continue
+                
+                loaded_at_ts = datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')
+                
+                # Deduplication Dictionary & Rejection List
+                dedup_valid_rows = {} 
+                rejected_rows = []
+                
+                # Row-Level Rules
+                for row in reader:
+                    if not row: continue
+                    
+                    # Indices based on the 46-column CSV layout:
+                    # 0: CompanyID, 11: CustomerNumber, 20: ICCID
+                    companyid = row[0].strip()
+                    customernumber = row[11].strip()
+                    iccid = row[20].strip()
+                    
+                    reject_reason = None
+                    
+                    if not iccid:
+                        reject_reason = "NULL_OR_EMPTY_ICCID"
+                    elif not customernumber:
+                        reject_reason = "NULL_OR_EMPTY_CUSTOMER_NUMBER"
+                    elif not companyid or companyid == "0":
+                        reject_reason = "NULL_OR_ZERO_COMPANY_ID"
+                        
+                    if reject_reason:
+                        rejected_rows.append((file_name, companyid, customernumber, iccid, reject_reason, loaded_at_ts))
+                    else:
+                        # Construct final row matching the DDL: [file_name] + [46 columns] + [loaded_at]
+                        final_row = [file_name] + row + [loaded_at_ts]
+                        
+                        # Deduplication: Overwrites previous entry with the same ICCID (keeps latest)
+                        dedup_valid_rows[iccid] = final_row
+                
+                # Convert dict back to list for loading
+                valid_rows_to_insert = list(dedup_valid_rows.values())
+                
+                # 4. DATABASE INSERTS
+                if valid_rows_to_insert:
+                    doris_hook.insert_rows(
+                        table="raw_actives_daily",
+                        rows=valid_rows_to_insert,
+                        commit_every=5000
+                    )
+                
+                if rejected_rows:
+                    doris_hook.insert_rows(
+                        table="raw_actives_daily_rejected",
+                        rows=rejected_rows,
+                        commit_every=5000
+                    )
+                
+                # 5. LOGGING RESULTS
+                print(f"SUCCESS: {file_name}")
+                print(f" -> Rows Loaded: {len(valid_rows_to_insert)}")
+                print(f" -> Rows Rejected: {len(rejected_rows)}")
+                
+                # 6. IDEMPOTENCY EXECUTION (Move to archive)
+                s3.copy_object(
+                    source_bucket_key=full_cloud_path,
+                    dest_bucket_key=f"{archive_prefix}{file_name}",
+                    source_bucket_name=bucket, dest_bucket_name=bucket
                 )
-                print(f"Successfully loaded {len(rows_to_insert)} rows into Doris!")
-            
-            # 4. Move to Archive so it doesn't get loaded again tomorrow
-            archive_key = f"{archive_prefix}{file_name}"
-            s3.copy_object(
-                source_bucket_key=full_cloud_path,
-                dest_bucket_key=archive_key,
-                source_bucket_name=bucket,
-                dest_bucket_name=bucket
-            )
-            # Delete from validated so it's clean for the next run
-            s3.delete_object(bucket_name=bucket, key=full_cloud_path)
-            print(f"Archived {file_name}.")
+                s3.delete_object(bucket_name=bucket, key=full_cloud_path)
+
+            except Exception as e:
+                # Per-file isolation: Log the error and continue to the next file
+                print(f"FAILED to process {file_name}. Error: {str(e)}")
+                continue
 
     load_step = load_validated_to_doris()
 
     # ---------------------------------------------------------
-    # DAG DEPENDENCIES (This tells Airflow what order to run in)
+    # DAG DEPENDENCIES
     # ---------------------------------------------------------
     validate_step >> load_step
