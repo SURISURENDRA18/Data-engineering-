@@ -381,7 +381,7 @@ with DAG(
                     dest_bucket_key=f"{archive_prefix}{file_name}",
                     source_bucket_name=bucket, dest_bucket_name=bucket
                 )
-                s3.delete_object(bucket_name=bucket, key=full_cloud_path)
+                
 
             except Exception as e:
                 print(f"FAILED to process {file_name}. Error: {str(e)}")
