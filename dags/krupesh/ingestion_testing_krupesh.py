@@ -41,8 +41,8 @@ with DAG(
         processed_history = []
         highest_seq = {}
         
-        validated_files = s3.list_keys(bucket_name=bucket, prefix="mediation/krupesh/validated/") or []
-        rejected_files = s3.list_keys(bucket_name=bucket, prefix="mediation/krupesh/rejected/") or []
+        validated_files = s3.list_keys(bucket_name=bucket, prefix="mediation/krupesh2/validated/") or []
+        rejected_files = s3.list_keys(bucket_name=bucket, prefix="mediation/krupesh2/rejected/") or []
         
         for full_path in validated_files + rejected_files:
             past_file = full_path.split('/')[-1]
