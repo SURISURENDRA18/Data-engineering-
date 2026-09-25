@@ -173,3 +173,37 @@ def test_malformed_data_row(file_validator, valid_header_line):
     )
     assert result.is_valid is False
     assert result.reason == REASON_INVALID_COLUMN_COUNT
+
+
+def test_valid_file_with_quoted_semicolon(file_validator, valid_header_line):
+    row = ["" for _ in range(46)]
+    row[0] = "100"
+    row[1] = '"Acme; Telecom Services"'  # Quoted semicolon must not be treated as delimiter
+    row[11] = "CUST1"
+    row[20] = "89014103211118510720"
+    row_line = ",".join(row) + "\n"
+    content = (valid_header_line + row_line).encode("utf-8")
+    stream = io.BytesIO(content)
+    result = file_validator.validate(
+        "US_01_Active_00001_20260922120000.csv", stream, file_size=len(content)
+    )
+    assert result.is_valid is True
+    assert result.reason is None
+
+
+def test_valid_file_with_quoted_comma_in_semicolon_file(file_validator):
+    header = ";".join(EXPECTED_COLUMNS) + "\n"
+    row = ["" for _ in range(46)]
+    row[0] = "100"
+    row[1] = '"Acme, Inc."'  # Quoted comma in semicolon file must not break parsing
+    row[11] = "CUST1"
+    row[20] = "89014103211118510720"
+    row_line = ";".join(row) + "\n"
+    content = (header + row_line).encode("utf-8")
+    stream = io.BytesIO(content)
+    result = file_validator.validate(
+        "US_01_Active_00001_20260922120000.csv", stream, file_size=len(content)
+    )
+    assert result.is_valid is True
+    assert result.reason is None
+

@@ -23,11 +23,11 @@ def test_stream_load_uses_airflow_connection(monkeypatch):
         },
     )
 
-    client = DorisClient(config=DorisConfig(database="actives_db", raw_table="raw_actives_daily"))
+    client = DorisClient(config=DorisConfig(database="surendra_db", raw_table="raw_actives_daily"))
     assert client._stream_load_http([{"customernumber": "1", "iccid": "2"}]) == 1
 
     args, kwargs = put.call_args
-    assert args[0] == "http://doris.internal:8040/api/actives_db/raw_actives_daily/_stream_load"
+    assert args[0] == "http://doris.internal:8040/api/surendra_db/raw_actives_daily/_stream_load"
     assert kwargs["auth"].username == "airflow-user"
 
 
@@ -93,11 +93,11 @@ def test_verify_schema_detects_key_mismatch():
     # 3. SHOW CREATE TABLE raw_actives_daily (wrong key)
     # 4. SHOW CREATE TABLE actives_file_tracking (correct key)
     mock_cursor.fetchall.side_effect = [
-        [{"Database": "actives_db"}],
+        [{"Database": "surendra_db"}],
         [
-            {"Tables_in_actives_db": "raw_actives_daily"},
-            {"Tables_in_actives_db": "raw_actives_daily_rejected"},
-            {"Tables_in_actives_db": "actives_file_tracking"},
+            {"Tables_in_surendra_db": "raw_actives_daily"},
+            {"Tables_in_surendra_db": "raw_actives_daily_rejected"},
+            {"Tables_in_surendra_db": "actives_file_tracking"},
         ],
     ]
 
@@ -108,7 +108,7 @@ def test_verify_schema_detects_key_mismatch():
         {"Create Table": "CREATE TABLE actives_file_tracking (file_hash varchar(64)) UNIQUE KEY(file_hash)"},
     ]
 
-    client = DorisClient(config=DorisConfig(database="actives_db"), connection=mock_conn)
+    client = DorisClient(config=DorisConfig(database="surendra_db"), connection=mock_conn)
     res = client.verify_schema()
 
     assert res["database_exists"] is True
@@ -130,7 +130,7 @@ def test_align_schema_if_needed_refuses_mutation_when_key_is_wrong():
         {"Create Table": "CREATE TABLE raw_actives_daily (iccid varchar(32)) UNIQUE KEY(iccid)"},
     ]
 
-    client = DorisClient(config=DorisConfig(database="actives_db"), connection=mock_conn)
+    client = DorisClient(config=DorisConfig(database="surendra_db"), connection=mock_conn)
     success = client.align_schema_if_needed()
     assert success is False
 

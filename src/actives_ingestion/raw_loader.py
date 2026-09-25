@@ -69,6 +69,17 @@ class RawLoader:
         Args:
             file_filter: Optional predicate to filter files by filename (used in integration testing).
         """
+        # Section 19: Safe configuration logging
+        logger.info("=== Task 2 Configuration ===")
+        logger.info("MINIO_ENDPOINT=%s", self.config.minio.endpoint)
+        logger.info("MINIO_BUCKET=%s", self.config.minio.bucket)
+        logger.info("MINIO_PREFIX=%s", self.config.minio.validated_prefix)
+        logger.info("DORIS_DATABASE=%s", self.config.doris.database)
+        logger.info("DORIS_TABLE=%s", self.config.doris.raw_table)
+        logger.info("DORIS_REJECTED_TABLE=%s", self.config.doris.rejected_table)
+        logger.info("DORIS_TRACKING_TABLE=%s", self.config.doris.tracking_table)
+        logger.info("============================")
+
         summary = PipelineSummary()
         self.doris.init_database_and_tables()
 
@@ -93,6 +104,7 @@ class RawLoader:
                     summary.files_failed += 1
             except Exception as e:
                 logger.exception(f"Fatal error loading validated file '{file_name}': {e}")
+                logger.info("TRACKING RESULT: FAILED")
                 summary.files_failed += 1
                 try:
                     stream = self.minio.get_object_stream(object_key)
@@ -107,17 +119,40 @@ class RawLoader:
                     pass
                 continue
 
-        summary.log_summary(logger.info)
+        # Section 17: Structured Final Summary logging
+        logger.info("========================================")
+        logger.info("Task 2 Summary")
+        logger.info("")
+        logger.info("Files discovered: %d", summary.files_discovered)
+        logger.info("Files loaded: %d", summary.files_loaded)
+        logger.info("Files skipped: %d", summary.files_skipped_duplicate)
+        logger.info("Files failed: %d", summary.files_failed)
+        logger.info("")
+        logger.info("Rows loaded: %d", summary.total_rows_loaded)
+        logger.info("Rows rejected: %d", summary.total_rows_rejected)
+        logger.info("")
+        logger.info("Doris table:\n%s.%s", self.config.doris.database, self.config.doris.raw_table)
+        logger.info("")
+        logger.info("Rejected table:\n%s.%s", self.config.doris.database, self.config.doris.rejected_table)
+        logger.info("========================================")
+
         return summary
 
     def _load_single_file(self, object_key: str, file_name: str) -> FileProcessingSummary:
         """Process and ingest a single validated file with full row isolation and idempotency."""
+        logger.info(f"DISCOVERED FILE: {file_name}")
         stream = self.minio.get_object_stream(object_key)
         file_hash = calculate_sha256(stream)
+        logger.info(f"FILE HASH: {file_hash}")
+
+        # Section 9: Structured tracking status check
+        tracking_status = self.tracking_repo.get_file_status(file_hash)
+        logger.info(f"TRACKING STATUS: {tracking_status or 'NOT_FOUND'}")
 
         # Idempotency check: skip already loaded files
-        if self.tracking_repo.is_file_processed(file_hash):
-            logger.info(f"File already processed: {file_name} (hash: {file_hash}). Skipping.")
+        if tracking_status == STATUS_SUCCESS:
+            logger.info(f"SKIPPED: {file_name}")
+            logger.info("REASON: ALREADY_SUCCESS")
             return FileProcessingSummary(
                 file_name=file_name,
                 file_hash=file_hash,
@@ -146,7 +181,8 @@ class RawLoader:
 
         reader = csv.reader(text_stream, delimiter=delimiter)
 
-        header = next(reader)
+        raw_header = next(reader)
+        header = [col.strip().lstrip("\ufeff") for col in raw_header]
         loaded_at_str = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
 
         accepted_raw_rows: list[dict[str, str]] = []
@@ -154,9 +190,11 @@ class RawLoader:
 
         row_index = 0
         for row in reader:
+            if not row or (len(row) == 1 and not row[0].strip()):
+                continue
             row_index += 1
             raw_line = delimiter.join(row)
-            row_dict = dict(zip(header, row))
+            row_dict = {k: v.strip() if isinstance(v, str) else v for k, v in zip(header, row)}
 
             val_result: RowValidationResult = RowValidator.validate_row(
                 row_dict=row_dict,
@@ -182,7 +220,7 @@ class RawLoader:
                     )
                 )
 
-        # Deduplicate accepted rows: keep latest occurrence for each business key pair
+        # Deduplicate accepted rows: keep latest occurrence for each business key pair (CustomerNumber, ICCID)
         deduplicated_rows = RowDeduplicator.deduplicate(accepted_raw_rows)
 
         doris_rows: list[dict[str, Any]] = []
@@ -215,9 +253,10 @@ class RawLoader:
             rows_rejected=rows_rejected,
         )
 
-        logger.info(
-            f"Successfully loaded file '{file_name}': {rows_loaded} rows loaded, {rows_rejected} rows rejected."
-        )
+        logger.info(f"VALID ROWS: {len(deduplicated_rows)}")
+        logger.info(f"REJECTED ROWS: {len(rejected_records)}")
+        logger.info(f"DORIS INSERTED: {rows_loaded}")
+        logger.info("TRACKING RESULT: SUCCESS")
 
         return FileProcessingSummary(
             file_name=file_name,

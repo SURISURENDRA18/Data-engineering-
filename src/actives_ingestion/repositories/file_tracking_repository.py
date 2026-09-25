@@ -59,9 +59,13 @@ class FileTrackingRepository:
 
     def is_file_processed(self, file_hash: str) -> bool:
         """Check if file hash has already been successfully processed (idempotency check)."""
+        return self.get_file_status(file_hash) == STATUS_SUCCESS
+
+    def get_file_status(self, file_hash: str) -> str | None:
+        """Fetch tracking status for a file hash from Doris or memory."""
         if self.in_memory:
             record = self._mem_records.get(file_hash)
-            return record is not None and record.get("status") == STATUS_SUCCESS
+            return record.get("status") if record else None
 
         try:
             conn = self._get_connection()
@@ -72,10 +76,10 @@ class FileTrackingRepository:
                 """
                 cursor.execute(sql, (file_hash,))
                 result = cursor.fetchone()
-                return result is not None and result.get("status") == STATUS_SUCCESS
+                return result.get("status") if result else None
         except Exception as e:
-            logger.error("Failed to check processed status from Doris: %s", e)
-            raise
+            logger.error("Failed to query file status from Doris: %s", e)
+            return None
 
     def validate_sequence(self, region: str, sequence_number: int) -> bool:
         """Validate sequence number for region against previously successfully processed files.

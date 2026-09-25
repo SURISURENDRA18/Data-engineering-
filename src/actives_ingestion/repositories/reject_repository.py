@@ -80,11 +80,6 @@ class RejectRepository:
         try:
             conn = self._get_connection()
             with conn.cursor() as cursor:
-                # Delete any existing rejected rows for these files to ensure exact rerun idempotency
-                for f_hash in target_hashes:
-                    del_sql = f"DELETE FROM {self.config.database}.{self.config.rejected_table} WHERE file_hash = %s"
-                    cursor.execute(del_sql, (f_hash,))
-
                 sql = f"""
                     INSERT INTO {self.config.database}.{self.config.rejected_table}
                     (id, file_name, file_hash, row_number, reason, iccid, customernumber, companyid, raw_row, rejected_at)

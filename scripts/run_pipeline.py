@@ -134,46 +134,8 @@ def run_fixtures_pipeline():
         conn.close()
 
 
-    # Cleanup demo files from MinIO and Doris
-    print("\nCleaning up demo test artifacts...")
-    try:
-        # MinIO cleanup
-        for obj in minio_client.list_objects(
-            pipeline_config.minio.bucket, prefix=pipeline_config.minio.validated_prefix, recursive=True
-        ):
-            if file_prefix in obj.object_name:
-                minio_client.remove_object(pipeline_config.minio.bucket, obj.object_name)
-        for obj in minio_client.list_objects(
-            pipeline_config.minio.bucket, prefix=pipeline_config.minio.rejected_prefix, recursive=True
-        ):
-            if file_prefix in obj.object_name:
-                minio_client.remove_object(pipeline_config.minio.bucket, obj.object_name)
-
-        # Doris cleanup
-        conn = doris_client._get_connection()
-        with conn.cursor() as cur:
-            for sfile, _ in uploaded_files:
-                cur.execute(
-                    f"DELETE FROM {pipeline_config.doris.database}.{pipeline_config.doris.raw_table} "
-                    f"WHERE file_name = %s",
-                    (sfile,),
-                )
-                cur.execute(
-                    f"DELETE FROM {pipeline_config.doris.database}.{pipeline_config.doris.rejected_table} "
-                    f"WHERE file_name = %s",
-                    (sfile,),
-                )
-                cur.execute(
-                    f"DELETE FROM {pipeline_config.doris.database}.actives_file_tracking "
-                    f"WHERE file_name = %s",
-                    (sfile,),
-                )
-        conn.commit()
-        conn.close()
-        print("  -> Cleanup complete.")
-
-    except Exception as e:
-        print(f"  -> Cleanup notice: {e}")
+    # Non-destructive pipeline: All demo artifacts preserved permanently in Doris and MinIO
+    print("\nPipeline execution complete. All data and tracking records preserved permanently (No-Delete policy).")
 
     print("\n" + "=" * 70)
     print("PIPELINE DEMO EXECUTION COMPLETE (SUCCESS)")

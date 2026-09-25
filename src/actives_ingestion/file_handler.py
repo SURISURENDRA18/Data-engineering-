@@ -1,7 +1,7 @@
 """File Handler for Task 1 (validate_and_reject).
 
 Scans MinIO landing prefix, performs Checks 1-8 in strict order,
-and safely moves files to either validated or rejected/<reason> folders.
+and safely copies files to either validated or rejected/<reason> folders.
 Implements per-file isolation: failure of one file never stops subsequent files.
 Optimized for high-volume landings with metadata caching, deferred downloads,
 concurrent movements, and clean progress logging.
@@ -65,12 +65,26 @@ class FileHandler:
             logger.info("Landing validation task complete (no files to process).")
             return summary
 
+        # Pre-fetch existing routed destinations for destination-exists idempotency check
+        existing_destinations = self.minio.get_destination_files()
+
         # Phase 1: Sequential validation (strict Check 1-8 order and state tracking)
         # Using a lazy stream getter avoids downloading byte streams for non-matching files.
         pending_moves: list[tuple[str, str, ValidationResult]] = []
 
         for idx, object_key in enumerate(landing_files, 1):
             file_name = os.path.basename(object_key)
+
+            # Idempotency check: Skip if already routed to validated/ or rejected/
+            if file_name in existing_destinations:
+                logger.info(
+                    "Landing file '%s' already routed to '%s'. Skipping to preserve idempotency.",
+                    file_name,
+                    existing_destinations[file_name],
+                )
+                summary.files_skipped_duplicate += 1
+                continue
+
             try:
                 file_size = self.minio.get_object_size(object_key)
                 def stream_loader(k=object_key):
@@ -90,13 +104,13 @@ class FileHandler:
             if idx % 500 == 0 or idx == total_files:
                 logger.info(f"Validated {idx}/{total_files} file headers/metadata...")
 
-        # Phase 2: Execute file movements (concurrently for live MinIO, sequentially for in-memory)
+        # Phase 2: Execute non-destructive copies (concurrently for live MinIO).
         if self.minio.in_memory or self.max_workers <= 1:
             for idx, (object_key, file_name, result) in enumerate(pending_moves, 1):
                 try:
                     self._execute_single_move(object_key, file_name, result, summary)
                 except Exception as e:
-                    logger.error(f"Error moving landing file '{file_name}': {e}")
+                    logger.error(f"Error routing landing file '{file_name}': {e}")
                     summary.files_failed += 1
                 if idx % 100 == 0 or idx == len(pending_moves):
                     self._log_progress(summary, total_files)
@@ -115,12 +129,12 @@ class FileHandler:
                         action, reason = future.result()
                         if action == "VALIDATED":
                             summary.files_validated += 1
+                        elif action == "SKIPPED":
+                            summary.files_skipped_duplicate += 1
                         else:
                             summary.files_rejected += 1
-                            if reason == REASON_DUPLICATE:
-                                summary.files_skipped_duplicate += 1
                     except Exception as e:
-                        logger.error(f"Error moving landing file '{fname}': {e}")
+                        logger.error(f"Error routing landing file '{fname}': {e}")
                         summary.files_failed += 1
 
                     if completed_count % 100 == 0 or completed_count == len(pending_moves):
@@ -132,7 +146,7 @@ class FileHandler:
     def _execute_single_move(
         self, object_key: str, file_name: str, result: ValidationResult, summary: PipelineSummary
     ) -> None:
-        """Move a single file synchronously and update summary."""
+        """Copy a single file synchronously and update summary."""
         file_hash_str = result.file_hash or "N/A"
         if result.is_valid:
             dest = self.minio.move_to_validated(object_key)
@@ -142,10 +156,7 @@ class FileHandler:
             )
         else:
             reason = result.reason or "unknown_rejection"
-            if reason == REASON_DUPLICATE:
-                summary.files_skipped_duplicate += 1
             summary.files_rejected += 1
-
             dest = self.minio.move_to_rejected(object_key, reason)
             logger.debug(
                 f"[REJECTED] File: '{file_name}' | Reason: '{reason}' | Hash: {file_hash_str} | Destination: '{dest}'"
@@ -154,7 +165,7 @@ class FileHandler:
     def _move_file_worker(
         self, object_key: str, file_name: str, result: ValidationResult
     ) -> tuple[str, str | None]:
-        """Worker function for concurrent movement execution."""
+        """Worker function for concurrent non-destructive routing."""
         file_hash_str = result.file_hash or "N/A"
         if result.is_valid:
             dest = self.minio.move_to_validated(object_key)
@@ -173,8 +184,15 @@ class FileHandler:
     @staticmethod
     def _log_progress(summary: PipelineSummary, total: int) -> None:
         """Emit clean structured progress log."""
-        processed = summary.files_validated + summary.files_rejected + summary.files_failed
+        processed = (
+            summary.files_validated
+            + summary.files_rejected
+            + summary.files_skipped_duplicate
+            + summary.files_failed
+        )
         logger.info(
-            f"Routing progress: {processed}/{total} files moved "
-            f"({summary.files_validated} validated, {summary.files_rejected} rejected, {summary.files_failed} failed)..."
+            f"Routing progress: {processed}/{total} files processed "
+            f"({summary.files_validated} validated, {summary.files_rejected} rejected, "
+            f"{summary.files_skipped_duplicate} skipped duplicate/already-routed, "
+            f"{summary.files_failed} failed)..."
         )
