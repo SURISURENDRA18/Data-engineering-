@@ -20,7 +20,7 @@ REJECTED_PREFIX = "mediation/venky/rejected/"
 DORIS_DATABASE = "venky_actives"
 
 RAW_TABLE = "raw_actives_daily"
-REJECTED_TABLE = "raw_actives_daily"
+REJECTED_TABLE = "raw_actives_daily_rejected"
 CONTROL_TABLE = "actives_file_registry"
 
 
