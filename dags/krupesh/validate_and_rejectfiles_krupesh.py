@@ -3,6 +3,11 @@ from airflow.decorators import task
 from airflow.providers.amazon.aws.hooks.s3 import S3Hook
 from datetime import datetime
 import re
+from airflow.providers.mysql.hooks.mysql import MySqlHook
+import csv
+import io
+import gzip
+
 
 # 1. THE DAG MANAGER
 with DAG(
@@ -191,26 +196,18 @@ with DAG(
     validate_step = scan_and_sort_files()
 
     
-    # ---------------------------------------------------------
-    # TASK 2: LOAD TO APACHE DORIS (Strict Rules)
-    # ---------------------------------------------------------
+    # ==========================================
+    # TASK 2: LOAD TO APACHE DORIS
+    # ==========================================
     @task
     def load_validated_to_doris():
         print("Starting Doris Raw Table Loader with Row-Level Rules...")
-        
-        from airflow.providers.mysql.hooks.mysql import MySqlHook
-        import csv
-        import io
-        import gzip
-        from datetime import datetime
         
         s3 = S3Hook(aws_conn_id="krupesh_minio")
         bucket = "crushftp"
         doris_hook = MySqlHook(mysql_conn_id="krupesh_doris")
         
-        # 1. TABLE CREATION (Using their exact DDL)
-        # NOTE: If Doris throws the "ordered prefix" error on ICCID, you will need to 
-        # move `iccid VARCHAR(32) NOT NULL` to the very top of the column list!
+        # 1. TABLE CREATION 
         create_raw_table_sql = """
         CREATE TABLE IF NOT EXISTS raw_actives_daily (
             iccid                      VARCHAR(32) NOT NULL,
@@ -267,9 +264,8 @@ with DAG(
         PROPERTIES ("replication_num" = "1");
         """
         
-        # Design our own reject table as requested (Appending reject_reason)
         create_reject_table_sql = """
-        CREATE TABLE IF NOT EXISTS krupesh_db.raw_actives_daily_rejected (
+        CREATE TABLE IF NOT EXISTS raw_actives_daily_rejected (
             file_name                  VARCHAR(255),
             companyid                  VARCHAR(64),
             customernumber             VARCHAR(64),
@@ -285,9 +281,9 @@ with DAG(
         doris_hook.run(create_raw_table_sql)
         doris_hook.run(create_reject_table_sql)
 
-        # 2. FILE DISCOVERY & IDEMPOTENCY
-        validated_prefix = "mediation/krupesh/validated/"
-        archive_prefix = "mediation/krupesh/archive/"
+        # 2. FILE DISCOVERY 
+        validated_prefix = "mediation/krupesh2/validated/"
+        archive_prefix = "mediation/krupesh2/archive/"
         validated_files = s3.list_keys(bucket_name=bucket, prefix=validated_prefix)
         
         if not validated_files:
@@ -303,7 +299,6 @@ with DAG(
             print(f"\n--- Loading: {file_name} ---")
             
             try:
-                # Read File
                 file_obj = s3.get_key(key=full_cloud_path, bucket_name=bucket)
                 raw_bytes = file_obj.get()['Body'].read()
                 
@@ -320,28 +315,22 @@ with DAG(
                 
                 loaded_at_ts = datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')
                 
-                # Deduplication Dictionary & Rejection List
                 dedup_valid_rows = {} 
                 rejected_rows = []
                 
-                # Row-Level Rules
                 for row in reader:
                     if not row: continue
                     
-                    # --- THE FIX: PAD SHORT ROWS TO 46 COLUMNS ---
+                    # Pad short rows dynamically to exactly 46 columns
                     expected_csv_cols = 46
                     if len(row) < expected_csv_cols:
                         row = row + [""] * (expected_csv_cols - len(row))
-                    # ---------------------------------------------
                     
-                    # Indices based on the 46-column CSV layout:
-                    # 0: CompanyID, 11: CustomerNumber, 20: ICCID
                     companyid = row[0].strip()
                     customernumber = row[11].strip()
                     iccid = row[20].strip()
                     
                     reject_reason = None
-                    
                     if not iccid:
                         reject_reason = "NULL_OR_EMPTY_ICCID"
                     elif not customernumber:
@@ -352,32 +341,34 @@ with DAG(
                     if reject_reason:
                         rejected_rows.append((file_name, companyid, customernumber, iccid, reject_reason, loaded_at_ts))
                     else:
-                        # Extract the rest of the row, skipping the ICCID at index 20
+                        # Reorder to match DDL: Extract iccid, put it first, then file_name, then the rest
                         row_without_iccid = row[:20] + row[21:]
-                        
-                        # Construct final row matching the new DDL: [iccid, file_name, ...rest of data..., loaded_at]
                         final_row = [iccid, file_name] + row_without_iccid + [loaded_at_ts]
-                        
-                        # Deduplication: Overwrites previous entry with the same ICCID (keeps latest)
                         dedup_valid_rows[iccid] = final_row
                 
-                # Convert dict back to list for loading
                 valid_rows_to_insert = list(dedup_valid_rows.values())
                 
-                # 4. DATABASE INSERTS
-                if valid_rows_to_insert:
-                    doris_hook.insert_rows(
-                        table="raw_actives_daily",
-                        rows=valid_rows_to_insert,
-                        commit_every=5000
-                    )
-                
-                if rejected_rows:
-                    doris_hook.insert_rows(
-                        table="raw_actives_daily_rejected",
-                        rows=rejected_rows,
-                        commit_every=5000
-                    )
+                # 4. DATABASE INSERTS (High-Speed One-Shot)
+                if valid_rows_to_insert or rejected_rows:
+                    conn = doris_hook.get_conn()
+                    cursor = conn.cursor()
+                    try:
+                        if valid_rows_to_insert:
+                            # 48 placeholders for the 48 columns in target table
+                            placeholders = ", ".join(["%s"] * 48)
+                            insert_sql = f"INSERT INTO raw_actives_daily VALUES ({placeholders})"
+                            cursor.executemany(insert_sql, valid_rows_to_insert)
+                        
+                        if rejected_rows:
+                            # 6 placeholders for the 6 columns in reject table
+                            rej_placeholders = ", ".join(["%s"] * 6)
+                            rej_sql = f"INSERT INTO raw_actives_daily_rejected VALUES ({rej_placeholders})"
+                            cursor.executemany(rej_sql, rejected_rows)
+                            
+                        conn.commit()
+                    finally:
+                        cursor.close()
+                        conn.close()
                 
                 # 5. LOGGING RESULTS
                 print(f"SUCCESS: {file_name}")
@@ -393,13 +384,12 @@ with DAG(
                 s3.delete_object(bucket_name=bucket, key=full_cloud_path)
 
             except Exception as e:
-                # Per-file isolation: Log the error and continue to the next file
                 print(f"FAILED to process {file_name}. Error: {str(e)}")
                 continue
 
     load_step = load_validated_to_doris()
 
-    # ---------------------------------------------------------
+    # ==========================================
     # DAG DEPENDENCIES
-    # ---------------------------------------------------------
+    # ==========================================
     validate_step >> load_step
