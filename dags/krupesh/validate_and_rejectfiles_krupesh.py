@@ -328,6 +328,12 @@ with DAG(
                 for row in reader:
                     if not row: continue
                     
+                    # --- THE FIX: PAD SHORT ROWS TO 46 COLUMNS ---
+                    expected_csv_cols = 46
+                    if len(row) < expected_csv_cols:
+                        row = row + [""] * (expected_csv_cols - len(row))
+                    # ---------------------------------------------
+                    
                     # Indices based on the 46-column CSV layout:
                     # 0: CompanyID, 11: CustomerNumber, 20: ICCID
                     companyid = row[0].strip()
