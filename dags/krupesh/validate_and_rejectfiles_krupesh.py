@@ -212,7 +212,7 @@ with DAG(
         # NOTE: If Doris throws the "ordered prefix" error on ICCID, you will need to 
         # move `iccid VARCHAR(32) NOT NULL` to the very top of the column list!
         create_raw_table_sql = """
-        CREATE TABLE IF NOT EXISTS raw_actives_daily (
+        CREATE TABLE IF NOT EXISTS krupesh_db.raw_actives_daily (
             file_name                  VARCHAR(255),
             companyid                  VARCHAR(64),
             companyname                VARCHAR(255),
@@ -269,7 +269,7 @@ with DAG(
         
         # Design our own reject table as requested (Appending reject_reason)
         create_reject_table_sql = """
-        CREATE TABLE IF NOT EXISTS raw_actives_daily_rejected (
+        CREATE TABLE IF NOT EXISTS krupesh_db.raw_actives_daily_rejected (
             file_name                  VARCHAR(255),
             companyid                  VARCHAR(64),
             customernumber             VARCHAR(64),
@@ -286,8 +286,8 @@ with DAG(
         doris_hook.run(create_reject_table_sql)
 
         # 2. FILE DISCOVERY & IDEMPOTENCY
-        validated_prefix = "mediation/krupesh2/validated/"
-        archive_prefix = "mediation/krupesh2/archive/"
+        validated_prefix = "mediation/krupesh/validated/"
+        archive_prefix = "mediation/krupesh/archive/"
         validated_files = s3.list_keys(bucket_name=bucket, prefix=validated_prefix)
         
         if not validated_files:
