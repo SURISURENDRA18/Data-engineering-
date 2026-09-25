@@ -4,6 +4,8 @@ from airflow.providers.amazon.aws.hooks.s3 import S3Hook
 from datetime import datetime
 import re
 import gzip
+import csv
+import io
 
 # 1. THE DAG MANAGER
 with DAG(
@@ -92,30 +94,41 @@ with DAG(
                     else:
                         file_text = raw_bytes.decode("utf-8-sig")
                         
-                    lines = file_text.splitlines()
+                    # THE FIX: Use csv.reader instead of splitlines() and .split()
+                    reader = csv.reader(io.StringIO(file_text), delimiter=';')
                     
-                    if len(lines) < 2:
+                    # Rule 3 & 5: Check Headers
+                    try:
+                        headers = next(reader)
+                        actual_headers = [col.strip().strip('"') for col in headers]
+                    except StopIteration:
+                        actual_headers = [] # File is empty
+                        
+                    if len(actual_headers) == 0:
                         failure_reason = "header_only"
+                    elif len(actual_headers) < 9 or actual_headers != expected_headers:
+                        failure_reason = "invalid_column_count"
                     
-                    if failure_reason is None:
-                        actual_headers = [col.strip().strip('"') for col in lines[0].strip().split(';')]
-                        if len(actual_headers) < 9 or actual_headers != expected_headers:
-                            failure_reason = "invalid_column_count"
-                    
+                    # Rule 6: Row Check using the smart reader
                     if failure_reason is None:
                         expected_field_count = len(actual_headers)
-                        for row in lines[1:]:
-                            if not row.strip(): continue
-                            field_count = len(row.strip().split(';'))
-                            # Strict Check: If it's not EXACTLY 46 columns, fail it.
-                            if field_count != expected_field_count:
+                        row_count = 0
+                        
+                        for row in reader:
+                            if not row: continue # Skip empty lines
+                            row_count += 1
+                            
+                            # Strict Check: Exactly 46 columns, but now it respects quotes!
+                            if len(row) != expected_field_count:
                                 failure_reason = "invalid_column_count"
                                 break
+                                
+                        if failure_reason is None and row_count == 0:
+                            failure_reason = "header_only"
                                 
                 except Exception as e:
                     print(f"Decode error: {e}")
                     failure_reason = "not_text_format"
-
             # RULE 7 & 8
             if failure_reason is None and file_name in processed_history:
                 failure_reason = "duplicate"
