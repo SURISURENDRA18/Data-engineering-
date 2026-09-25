@@ -209,7 +209,7 @@ with DAG(
         
         # 1. TABLE CREATION 
         create_raw_table_sql = """
-        CREATE TABLE IF NOT EXISTS raw_actives_daily (
+        CREATE TABLE IF NOT EXISTS krupesh_db.raw_actives_daily (
             iccid                      VARCHAR(32) NOT NULL,
             file_name                  VARCHAR(255),
             companyid                  VARCHAR(64),
@@ -265,7 +265,7 @@ with DAG(
         """
         
         create_reject_table_sql = """
-        CREATE TABLE IF NOT EXISTS raw_actives_daily_rejected (
+        CREATE TABLE IF NOT EXISTS krupesh_db.raw_actives_daily_rejected (
             file_name                  VARCHAR(255),
             companyid                  VARCHAR(64),
             customernumber             VARCHAR(64),
@@ -282,8 +282,8 @@ with DAG(
         doris_hook.run(create_reject_table_sql)
 
         # 2. FILE DISCOVERY 
-        validated_prefix = "mediation/krupesh2/validated/"
-        archive_prefix = "mediation/krupesh2/archive/"
+        validated_prefix = "mediation/krupesh/validated/"
+        archive_prefix = "mediation/krupesh/archive/"
         validated_files = s3.list_keys(bucket_name=bucket, prefix=validated_prefix)
         
         if not validated_files:
