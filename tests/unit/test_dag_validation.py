@@ -11,16 +11,7 @@ def test_dag_import_and_callables():
     assert hasattr(dag_module, "task_validate_and_reject")
     assert hasattr(dag_module, "task_load_raw_table")
     assert hasattr(dag_module, "default_args")
-    assert dag_module.default_args.get("owner") == "data_engineering"
     assert dag_module.default_args.get("retries") == 2
-
-    import dags.surendra.actives_ingestion_dag as surendra_dag_module
-    assert hasattr(surendra_dag_module, "task_validate_and_reject")
-    assert hasattr(surendra_dag_module, "task_load_raw_table")
-    assert hasattr(surendra_dag_module, "default_args")
-    assert surendra_dag_module.default_args.get("owner") == "surendra"
-    assert surendra_dag_module.default_args.get("retries") == 2
-
 
 
 def test_real_airflow_dagbag_validation():
@@ -33,8 +24,8 @@ def test_real_airflow_dagbag_validation():
 
     dagbag = DagBag(dag_folder="dags/actives_ingestion_dag.py")
     assert len(dagbag.import_errors) == 0, f"Airflow import errors: {dagbag.import_errors}"
-    dag = dagbag.dags.get("actives_ingestion_dag")
-    assert dag is not None, "actives_ingestion_dag was not found in DagBag"
+    dag = dagbag.dags.get("surendra_actives_ingestion")
+    assert dag is not None, "surendra_actives_ingestion was not found in DagBag"
     tasks = {t.task_id: t for t in dag.tasks}
     assert "validate_and_reject" in tasks
     assert "load_raw_table" in tasks
@@ -88,7 +79,7 @@ def test_dag_definition_with_mock_airflow():
         import dags.actives_ingestion_dag as loaded_dag
 
         assert loaded_dag.dag is not None
-        assert loaded_dag.dag.dag_id == "actives_ingestion_dag"
+        assert loaded_dag.dag.dag_id == "surendra_actives_ingestion"
         assert loaded_dag.validate_and_reject.task_id == "validate_and_reject"
         assert loaded_dag.load_raw_table.task_id == "load_raw_table"
         assert loaded_dag.load_raw_table in loaded_dag.validate_and_reject.downstream

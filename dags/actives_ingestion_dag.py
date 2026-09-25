@@ -72,7 +72,7 @@ try:
         from airflow.operators.python import PythonOperator
 
     with DAG(
-        dag_id="actives_ingestion_dag",
+        dag_id="surendra_actives_ingestion",
         default_args=default_args,
         description="Ingestion and validation pipeline for active telecom subscribers",
         schedule=None,
