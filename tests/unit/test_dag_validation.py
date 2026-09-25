@@ -6,7 +6,7 @@ from unittest.mock import MagicMock
 
 def test_dag_import_and_callables():
     """Verify DAG module can be imported without syntax or import errors."""
-    import dags.actives_ingestion_dag as dag_module
+    import dags.surendra.surendra_actives_ingestion_dag as dag_module
 
     assert hasattr(dag_module, "task_validate_and_reject")
     assert hasattr(dag_module, "task_load_raw_table")
@@ -22,7 +22,7 @@ def test_real_airflow_dagbag_validation():
     except ImportError:
         pytest.skip("Real Apache Airflow is not installed in this environment")
 
-    dagbag = DagBag(dag_folder="dags/actives_ingestion_dag.py")
+    dagbag = DagBag(dag_folder="dags/surendra/surendra_actives_ingestion_dag.py")
     assert len(dagbag.import_errors) == 0, f"Airflow import errors: {dagbag.import_errors}"
     dag = dagbag.dags.get("surendra_actives_ingestion")
     assert dag is not None, "surendra_actives_ingestion was not found in DagBag"
@@ -73,10 +73,10 @@ def test_dag_definition_with_mock_airflow():
             "airflow.providers.standard.operators.python": mock_python_operator,
         })
     ):
-        if "dags.actives_ingestion_dag" in sys.modules:
-            del sys.modules["dags.actives_ingestion_dag"]
+        if "dags.surendra.surendra_actives_ingestion_dag" in sys.modules:
+            del sys.modules["dags.surendra.surendra_actives_ingestion_dag"]
 
-        import dags.actives_ingestion_dag as loaded_dag
+        import dags.surendra.surendra_actives_ingestion_dag as loaded_dag
 
         assert loaded_dag.dag is not None
         assert loaded_dag.dag.dag_id == "surendra_actives_ingestion"

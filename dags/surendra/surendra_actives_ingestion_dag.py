@@ -8,16 +8,17 @@ import os
 import sys
 from datetime import datetime, timedelta
 
-# Ensure src package is importable
-SRC_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "src"))
-if SRC_DIR not in sys.path:
-    sys.path.insert(0, SRC_DIR)
+# Ensure src package is importable across environments
+for rel_path in [("..", "..", "src"), ("..", "src")]:
+    cand = os.path.abspath(os.path.join(os.path.dirname(__file__), *rel_path))
+    if os.path.isdir(cand) and cand not in sys.path:
+        sys.path.insert(0, cand)
 
 from actives_ingestion.file_handler import FileHandler
 from actives_ingestion.raw_loader import RawLoader
 from actives_ingestion.utils import get_logger
 
-logger = get_logger("actives_ingestion_dag")
+logger = get_logger("surendra_actives_ingestion_dag")
 
 
 def task_validate_and_reject(**context):
