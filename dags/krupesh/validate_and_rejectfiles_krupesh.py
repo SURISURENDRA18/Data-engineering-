@@ -212,7 +212,8 @@ with DAG(
         # NOTE: If Doris throws the "ordered prefix" error on ICCID, you will need to 
         # move `iccid VARCHAR(32) NOT NULL` to the very top of the column list!
         create_raw_table_sql = """
-        CREATE TABLE IF NOT EXISTS krupesh_db.raw_actives_daily (
+        CREATE TABLE IF NOT EXISTS raw_actives_daily (
+            iccid                      VARCHAR(32) NOT NULL,
             file_name                  VARCHAR(255),
             companyid                  VARCHAR(64),
             companyname                VARCHAR(255),
@@ -234,7 +235,6 @@ with DAG(
             commercialofferdescription VARCHAR(255),
             lasttrafficdate            VARCHAR(30),
             productid                  VARCHAR(64),
-            iccid                      VARCHAR(32) NOT NULL,
             extramsisdn1               VARCHAR(32),
             extracreationdate1         VARCHAR(30),
             extramsisdn2               VARCHAR(32),
@@ -346,8 +346,11 @@ with DAG(
                     if reject_reason:
                         rejected_rows.append((file_name, companyid, customernumber, iccid, reject_reason, loaded_at_ts))
                     else:
-                        # Construct final row matching the DDL: [file_name] + [46 columns] + [loaded_at]
-                        final_row = [file_name] + row + [loaded_at_ts]
+                        # Extract the rest of the row, skipping the ICCID at index 20
+                        row_without_iccid = row[:20] + row[21:]
+                        
+                        # Construct final row matching the new DDL: [iccid, file_name, ...rest of data..., loaded_at]
+                        final_row = [iccid, file_name] + row_without_iccid + [loaded_at_ts]
                         
                         # Deduplication: Overwrites previous entry with the same ICCID (keeps latest)
                         dedup_valid_rows[iccid] = final_row
