@@ -99,3 +99,9 @@ try:
 
 except Exception as e:
     logger.warning("Could not register Airflow DAG in this Python environment: %s", e)
+
+
+if __name__ == "__main__":
+    task_validate_and_reject()
+    task_load_raw_table()
+

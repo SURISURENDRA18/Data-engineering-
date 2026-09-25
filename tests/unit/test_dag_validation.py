@@ -14,6 +14,14 @@ def test_dag_import_and_callables():
     assert dag_module.default_args.get("owner") == "data_engineering"
     assert dag_module.default_args.get("retries") == 2
 
+    import dags.surendra.actives_ingestion_dag as surendra_dag_module
+    assert hasattr(surendra_dag_module, "task_validate_and_reject")
+    assert hasattr(surendra_dag_module, "task_load_raw_table")
+    assert hasattr(surendra_dag_module, "default_args")
+    assert surendra_dag_module.default_args.get("owner") == "surendra"
+    assert surendra_dag_module.default_args.get("retries") == 2
+
+
 
 def test_real_airflow_dagbag_validation():
     """Validate DAG structure directly using real Airflow DagBag when installed."""
