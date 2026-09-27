@@ -184,3 +184,59 @@ def test_airflow_client_trigger_dag():
         assert res["success"] is True
         assert res["data"]["state"] == "queued"
         mock_req.assert_called_once()
+
+
+def test_airflow_client_wait_for_dag_run_success():
+    client = AirflowClient()
+    client._token = "mock_token"
+
+    queued_resp = MagicMock(status_code=200)
+    queued_resp.json.return_value = {"dag_run_id": "run_1", "state": "running"}
+
+    success_resp = MagicMock(status_code=200)
+    success_resp.json.return_value = {"dag_run_id": "run_1", "state": "success"}
+
+    with patch("requests.request", side_effect=[queued_resp, success_resp]):
+        res = client.wait_for_dag_run("actives_ingestion_dag", "run_1", timeout=5.0, poll_interval=0.01)
+        assert res["success"] is True
+        assert res["data"]["state"] == "success"
+
+
+def test_airflow_client_wait_for_dag_run_timeout():
+    client = AirflowClient()
+    client._token = "mock_token"
+
+    running_resp = MagicMock(status_code=200)
+    running_resp.json.return_value = {"dag_run_id": "run_1", "state": "running"}
+
+    with patch("requests.request", return_value=running_resp):
+        res = client.wait_for_dag_run("actives_ingestion_dag", "run_1", timeout=0.05, poll_interval=0.01)
+        assert res["success"] is False
+        assert "Timed out" in res["error"]
+
+
+def test_airflow_client_get_task_log_events():
+    client = AirflowClient()
+    client._token = "mock_token"
+
+    # 1. Dict with content events
+    mock_resp = MagicMock(status_code=200)
+    mock_resp.headers = {"Content-Type": "application/json"}
+    mock_resp.json.return_value = {
+        "content": [
+            {"event": "Executing task"},
+            {"event": "Task completed successfully"},
+        ]
+    }
+    with patch("requests.request", return_value=mock_resp):
+        events = client.get_task_log_events("dag", "run", "task")
+        assert events == ["Executing task", "Task completed successfully"]
+
+    # 2. Plain string
+    mock_resp_str = MagicMock(status_code=200)
+    mock_resp_str.headers = {"Content-Type": "text/plain"}
+    mock_resp_str.text = "Line 1\nLine 2"
+    with patch("requests.request", return_value=mock_resp_str):
+        events_str = client.get_task_log_events("dag", "run", "task")
+        assert events_str == ["Line 1", "Line 2"]
+

@@ -8,7 +8,9 @@ Verifies all 7 file-level rejection reasons, 3 row-level rejection reasons,
 table schemas, deduplication, metadata population, and rerun idempotency.
 """
 
+import random
 import socket
+import string
 
 import pymysql
 import pytest
@@ -37,7 +39,11 @@ from actives_ingestion.repositories.file_tracking_repository import (
 )
 from actives_ingestion.repositories.reject_repository import RejectRepository
 
-TEST_PREFIX = "AUDITTEST_"
+# Unique alphabetic region prefix per test session to guarantee strict isolation
+# and repeatable idempotency while adhering to Check 1 regex (^[A-Za-z]+_...)
+_SESSION_SUFFIX = "".join(random.choices(string.ascii_uppercase, k=6))
+TEST_PREFIX = f"AUDIT{_SESSION_SUFFIX}_"
+
 
 
 def check_tcp_endpoint(host: str, port: int, timeout: float = 2.0) -> tuple[bool, str]:
@@ -68,6 +74,7 @@ def test_external_services_connectivity_diagnostic():
     minio_ok, minio_err = check_tcp_endpoint(minio_host, minio_port)
     doris_sql_ok, doris_sql_err = check_tcp_endpoint(config.doris.host, config.doris.port)
     doris_http_ok, doris_http_err = check_tcp_endpoint(config.doris.host, config.doris.http_port)
+    airflow_ok, airflow_err = check_tcp_endpoint(config.airflow.host, config.airflow.port)
 
     # Diagnostic report
     status_report = {
@@ -77,11 +84,15 @@ def test_external_services_connectivity_diagnostic():
         "doris_sql_status": "REACHABLE" if doris_sql_ok else f"REFUSED: {doris_sql_err}",
         "doris_http_endpoint": f"{config.doris.host}:{config.doris.http_port}",
         "doris_http_status": "REACHABLE" if doris_http_ok else f"REFUSED: {doris_http_err}",
+        "airflow_endpoint": f"{config.airflow.host}:{config.airflow.port}",
+        "airflow_status": "REACHABLE" if airflow_ok else f"REFUSED: {airflow_err}",
     }
 
     assert isinstance(status_report, dict)
     assert "minio_status" in status_report
     assert "doris_sql_status" in status_report
+    assert "airflow_status" in status_report
+
 
 
 def get_live_minio_service() -> MinioService | None:
@@ -174,12 +185,12 @@ def test_live_all_seven_rejections_and_valid_movement(live_minio):
     # 7. Valid file with 2 valid rows, 1 duplicate pair, 3 invalid rows
     f_valid = f"{TEST_PREFIX}01_Active_00001_20260922120000.csv"
     valid_rows = [
-        {"CompanyID": "100", "CustomerNumber": "CUST_LIVE_1", "ICCID": "89014103211118510001", "PlanName": "PlanInitial"},
-        {"CompanyID": "100", "CustomerNumber": "CUST_LIVE_1", "ICCID": "89014103211118510001", "PlanName": "PlanLatest"},  # dup pair
-        {"CompanyID": "200", "CustomerNumber": "CUST_LIVE_2", "ICCID": "89014103211118510002", "PlanName": "PlanStandard"},
-        {"CompanyID": "300", "CustomerNumber": "CUST_LIVE_3", "ICCID": "", "PlanName": "PlanErr1"},  # null iccid
+        {"CompanyID": "100", "CustomerNumber": f"CUST_LIVE_{_SESSION_SUFFIX}_1", "ICCID": "89014103211118510001", "PlanName": "PlanInitial"},
+        {"CompanyID": "100", "CustomerNumber": f"CUST_LIVE_{_SESSION_SUFFIX}_1", "ICCID": "89014103211118510001", "PlanName": "PlanLatest"},  # dup pair
+        {"CompanyID": "200", "CustomerNumber": f"CUST_LIVE_{_SESSION_SUFFIX}_2", "ICCID": "89014103211118510002", "PlanName": "PlanStandard"},
+        {"CompanyID": "300", "CustomerNumber": f"CUST_LIVE_{_SESSION_SUFFIX}_3", "ICCID": "", "PlanName": "PlanErr1"},  # null iccid
         {"CompanyID": "400", "CustomerNumber": "", "ICCID": "89014103211118510004", "PlanName": "PlanErr2"},  # null cust
-        {"CompanyID": "0", "CustomerNumber": "CUST_LIVE_5", "ICCID": "89014103211118510005", "PlanName": "PlanErr3"},  # zero comp
+        {"CompanyID": "0", "CustomerNumber": f"CUST_LIVE_{_SESSION_SUFFIX}_5", "ICCID": "89014103211118510005", "PlanName": "PlanErr3"},  # zero comp
     ]
     minio.put_object_data(f"mediation/landing/{f_valid}", make_csv_data(valid_rows))
 
@@ -238,18 +249,19 @@ def test_live_doris_loading_and_idempotent_rerun():
     f_valid = f"{TEST_PREFIX}01_Active_00001_20260922120000.csv"
     if f"mediation/surendra/validated/{f_valid}" not in minio.list_validated_files():
         valid_rows = [
-            {"CompanyID": "100", "CustomerNumber": "CUST_LIVE_1", "ICCID": "89014103211118510001", "PlanName": "PlanInitial"},
-            {"CompanyID": "100", "CustomerNumber": "CUST_LIVE_1", "ICCID": "89014103211118510001", "PlanName": "PlanLatest"},
-            {"CompanyID": "200", "CustomerNumber": "CUST_LIVE_2", "ICCID": "89014103211118510002", "PlanName": "PlanStandard"},
-            {"CompanyID": "300", "CustomerNumber": "CUST_LIVE_3", "ICCID": "", "PlanName": "PlanErr1"},
+            {"CompanyID": "100", "CustomerNumber": f"CUST_LIVE_{_SESSION_SUFFIX}_1", "ICCID": "89014103211118510001", "PlanName": "PlanInitial"},
+            {"CompanyID": "100", "CustomerNumber": f"CUST_LIVE_{_SESSION_SUFFIX}_1", "ICCID": "89014103211118510001", "PlanName": "PlanLatest"},
+            {"CompanyID": "200", "CustomerNumber": f"CUST_LIVE_{_SESSION_SUFFIX}_2", "ICCID": "89014103211118510002", "PlanName": "PlanStandard"},
+            {"CompanyID": "300", "CustomerNumber": f"CUST_LIVE_{_SESSION_SUFFIX}_3", "ICCID": "", "PlanName": "PlanErr1"},
             {"CompanyID": "400", "CustomerNumber": "", "ICCID": "89014103211118510004", "PlanName": "PlanErr2"},
-            {"CompanyID": "0", "CustomerNumber": "CUST_LIVE_5", "ICCID": "89014103211118510005", "PlanName": "PlanErr3"},
+            {"CompanyID": "0", "CustomerNumber": f"CUST_LIVE_{_SESSION_SUFFIX}_5", "ICCID": "89014103211118510005", "PlanName": "PlanErr3"},
         ]
         minio.put_object_data(f"mediation/landing/{f_valid}", make_csv_data(valid_rows))
         FileHandler(
             minio_service=minio,
             tracking_repository=FileTrackingRepository(in_memory=True),
         ).process_landing_files(file_filter=lambda name: name == f_valid)
+
 
     raw_loader = RawLoader(
         config=config,
@@ -285,10 +297,11 @@ def test_live_doris_loading_and_idempotent_rerun():
         assert len(raw_rows) == 2
 
         # Check deduplication kept latest row
-        cust1 = next(r for r in raw_rows if r["customernumber"] == "CUST_LIVE_1")
+        cust1 = next(r for r in raw_rows if r["customernumber"] == f"CUST_LIVE_{_SESSION_SUFFIX}_1")
         assert cust1["planname"] == "PlanLatest"
         assert cust1["file_name"] == f_valid
         assert cust1["loaded_at"] is not None
+
 
         # Check rejected table
         cur.execute(

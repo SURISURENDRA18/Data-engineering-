@@ -267,20 +267,29 @@ This verifies:
 
 ## 8. How to Trigger the DAG
 
-### Option A: Via Airflow REST API / CLI
+### Option A: Dedicated Live Airflow CLI Test Runner
+```bash
+python3 scripts/test_live_airflow.py
+# Or with custom options:
+python3 scripts/test_live_airflow.py --timeout 150
+python3 scripts/test_live_airflow.py --skip-staging --filter "Active"
+```
+
+### Option B: Via Airflow REST API / CLI Diagnostic
 ```bash
 python3 scripts/test_airflow_connection.py
 ```
 Or via curl:
 ```bash
 TOKEN=$(curl -s -X POST http://34.130.209.7:32002/auth/token -H "Content-Type: application/json" -d '{"username":"admin","password":"admin"}' | jq -r .access_token)
-curl -X POST http://34.130.209.7:32002/api/v2/dags/actives_ingestion_dag/dagRuns \
+curl -X POST http://34.130.209.7:32002/api/v2/dags/surendra_actives_ingestion/dagRuns \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"conf":{}}'
 ```
 
-### Option B: Unified CLI Runner
+### Option C: Unified Pipeline Runner
+
 ```bash
 # Run safe end-to-end demo with test fixtures
 python3 scripts/run_pipeline.py --mode fixtures
@@ -442,6 +451,13 @@ python3 -m pytest tests/integration/test_pipeline.py -v
 # 3. Run live service integration tests against live MinIO and Doris
 python3 -m pytest tests/integration/test_live_services.py -v
 
-# 4. Code quality & linting
-python3 -m ruff check src dags tests
+# 4. Run live Airflow 3 end-to-end integration tests (health, DAG status, remote trigger, log retrieval, warehouse verification)
+python3 -m pytest tests/integration/test_live_airflow.py -v
+
+# 5. Standalone Live Airflow CLI test runner
+python3 scripts/test_live_airflow.py
+
+# 6. Code quality & linting
+ruff check src dags/surendra tests scripts
 ```
+

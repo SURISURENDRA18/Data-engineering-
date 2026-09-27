@@ -12,7 +12,6 @@ from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from actives_ingestion.config import PipelineConfig, pipeline_config
-from actives_ingestion.constants import REASON_DUPLICATE
 from actives_ingestion.minio_client import MinioService
 from actives_ingestion.models import PipelineSummary, ValidationResult
 from actives_ingestion.repositories.file_tracking_repository import (

@@ -205,3 +205,53 @@ class AirflowClient:
             return {"success": False, "status_code": resp.status_code, "error": resp.text}
         except Exception as exc:
             return {"success": False, "status_code": None, "error": str(exc)}
+
+    def wait_for_dag_run(
+        self,
+        dag_id: str,
+        dag_run_id: str,
+        timeout: float = 120.0,
+        poll_interval: float = 2.0,
+    ) -> dict[str, Any]:
+        """Poll a DAG run until it reaches a terminal state (success, failed) or timeout."""
+        import time
+
+        start_time = time.time()
+        last_state = None
+        while time.time() - start_time < timeout:
+            res = self.get_dag_run(dag_id, dag_run_id)
+            if res.get("success"):
+                data = res.get("data", {})
+                last_state = data.get("state")
+                if last_state in ("success", "failed"):
+                    return res
+            time.sleep(poll_interval)
+        return {
+            "success": False,
+            "error": f"Timed out waiting for DAG run {dag_run_id} after {timeout}s",
+            "last_state": last_state,
+        }
+
+    def get_task_log_events(
+        self, dag_id: str, dag_run_id: str, task_id: str, try_number: int = 1
+    ) -> list[str]:
+        """Extract plain log lines or event strings from a task log response."""
+        res = self.get_task_log(dag_id, dag_run_id, task_id, try_number=try_number)
+        if not res.get("success"):
+            return []
+        data = res.get("data")
+        if isinstance(data, str):
+            return data.splitlines()
+        if isinstance(data, dict):
+            content = data.get("content", [])
+            lines = []
+            for item in content:
+                if isinstance(item, dict):
+                    event = item.get("event", "")
+                    if event:
+                        lines.append(str(event))
+                elif isinstance(item, str):
+                    lines.append(item)
+            return lines
+        return []
+
