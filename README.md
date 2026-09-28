@@ -301,12 +301,11 @@ python3 scripts/run_pipeline.py --mode landing
 python3 scripts/run_pipeline.py --mode landing --filter "Active"
 ```
 
-### Option C: Direct DAG Execution
+### Option D: Direct Local DAG Execution
 ```bash
-python3 dags/actives_ingestion_dag.py
-# or
-python3 dags/surendra/actives_ingestion_dag.py
+python3 dags/surendra/surendra_actives_ingestion_dag.py
 ```
+
 
 ---
 
