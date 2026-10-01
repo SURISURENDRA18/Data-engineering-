@@ -85,9 +85,9 @@ Create or configure a `.env` file in the project root (never committed to versio
 
 ```env
 # MinIO Object Storage
-MINIO_ENDPOINT=34.130.209.7:32010
-MINIO_ACCESS_KEY=ZUHn0xWNRcrW9j72N9dk
-MINIO_SECRET_KEY=F5KIECDZgAuOLVTLoK6eKhPQKKRl6xTBfsX0ARc7
+MINIO_ENDPOINT=<SERVER_HOST>:<MINIO_API_PORT>
+MINIO_ACCESS_KEY=<your-minio-access-key>
+MINIO_SECRET_KEY=<your-minio-secret-key>
 MINIO_SECURE=false
 MINIO_BUCKET=crushftp
 MINIO_LANDING_PREFIX=mediation/landing/
@@ -95,11 +95,11 @@ MINIO_VALIDATED_PREFIX=mediation/surendra/validated/
 MINIO_REJECTED_PREFIX=mediation/surendra/rejected/
 
 # Apache Doris
-DORIS_HOST=34.130.209.7
-DORIS_PORT=31545
-DORIS_HTTP_PORT=32713
-DORIS_USER=root
-DORIS_PASSWORD=
+DORIS_HOST=<SERVER_HOST>
+DORIS_PORT=<doris-mysql-port>
+DORIS_HTTP_PORT=<doris-http-port>
+DORIS_USER=<your-doris-user>
+DORIS_PASSWORD=<your-doris-password>
 DORIS_DATABASE=surendra_db
 DORIS_RAW_TABLE=raw_actives_daily
 DORIS_REJECTED_TABLE=raw_actives_daily_rejected
@@ -108,13 +108,13 @@ DORIS_CONNECT_TIMEOUT=10
 BATCH_SIZE=5000
 
 # Remote Apache Airflow 3
-AIRFLOW_HOST=34.130.209.7
-AIRFLOW_PORT=32002
-AIRFLOW_USER=admin
-AIRFLOW_PASSWORD=admin
+AIRFLOW_HOST=<SERVER_HOST>
+AIRFLOW_PORT=<airflow-port>
+AIRFLOW_USER=<your-airflow-user>
+AIRFLOW_PASSWORD=<your-airflow-password>
 AIRFLOW_VERSION=3.3.2
-AIRFLOW_UI_URL=http://34.130.209.7:32002
-AIRFLOW_API_URL=http://34.130.209.7:32002/api/v2
+AIRFLOW_UI_URL=http://<SERVER_HOST>:<AIRFLOW_PORT>
+AIRFLOW_API_URL=http://<SERVER_HOST>:<AIRFLOW_PORT>/api/v2
 ```
 
 ---
@@ -257,11 +257,11 @@ python3 scripts/verify_all_connections.py
 ```
 
 This verifies:
-- Airflow UI & REST API health (34.130.209.7:32002)
-- Doris Coupled MySQL client (34.130.209.7:31545)
-- Doris Coupled Stream Load (34.130.209.7:32713)
-- MinIO UI (34.130.209.7:30957)
-- MinIO API (34.130.209.7:32010)
+- Airflow UI & REST API health (<SERVER_HOST>:<AIRFLOW_PORT>)
+- Doris Coupled MySQL client (<SERVER_HOST>:<DORIS_PORT>)
+- Doris Coupled Stream Load (<SERVER_HOST>:<DORIS_HTTP_PORT>)
+- MinIO UI (<SERVER_HOST>:<MINIO_UI_PORT>)
+- MinIO API (<SERVER_HOST>:<MINIO_API_PORT>)
 
 ---
 
@@ -281,8 +281,8 @@ python3 scripts/test_airflow_connection.py
 ```
 Or via curl:
 ```bash
-TOKEN=$(curl -s -X POST http://34.130.209.7:32002/auth/token -H "Content-Type: application/json" -d '{"username":"admin","password":"admin"}' | jq -r .access_token)
-curl -X POST http://34.130.209.7:32002/api/v2/dags/surendra_actives_ingestion/dagRuns \
+TOKEN=$(curl -s -X POST http://<SERVER_HOST>:<AIRFLOW_PORT>/auth/token -H "Content-Type: application/json" -d '{"username":"<AIRFLOW_USER>","password":"<AIRFLOW_PASSWORD>"}' | jq -r .access_token)
+curl -X POST http://<SERVER_HOST>:<AIRFLOW_PORT>/api/v2/dags/surendra_actives_ingestion/dagRuns \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"conf":{}}'
